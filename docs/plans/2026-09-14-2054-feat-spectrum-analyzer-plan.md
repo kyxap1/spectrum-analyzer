@@ -18,7 +18,7 @@ deepened: 2026-09-14
 - **Means:** a native Swift macOS app built as a SwiftPM package (KTD1), built and tested locally, released by GitHub Actions on version tags (KTD11), and installed through a cask kept in this repository (KTD12).
 - **Product authority:** this Product Contract. Key Decisions marked `session-settled` were made by the user and are not reopened.
 - **Planning authority:** the Planning Contract. A KTD wins on mechanism within the constraints of the R-IDs it cites. A unit never overrides either.
-- **Execution profile:** `swift build` and `swift test` run on the host with Command Line Tools (Swift 6.2.4, which includes Swift Testing). Xcode is not installed and not needed. Hardware, permission and install checks are manual on the user's Mac.
+- **Execution profile:** `swift build` and `swift test` run on the host with Command Line Tools (Swift 6.2.4, which includes Swift Testing). Xcode is not installed and not needed. Hardware, permission and install checks are manual on the user's Mac. The session model, Sonnet by default, implements every unit except U2, U4 and U5. Those three must be dispatched as subagents with the model pinned to `opus` (Agent tool `model: "opus"`), whatever the session model is: they hold the real-time audio code and lock-free queues, whose bugs show up only on live sound.
 - **Stop conditions:**
   - The U8 upgrade check shows macOS asking for microphone or system audio permission again after `brew upgrade`. Stop and ask the user whether to use a self-signed certificate (KTD10), because that bends the unsigned-distribution Key Decision.
   - The process tap delivers only zeros with System Audio Recording granted on macOS 26.6. Stop and report, because R1 cannot be met as designed.
@@ -421,7 +421,7 @@ flowchart TB
 3. The clock maps host time to history frames and excludes paused intervals.
 4. The queue is single-producer, single-consumer, and never blocks the real-time producer. On overflow it drops the chunk and counts the drop.
 
-**Execution note:** Implement test-first; this is pure logic with exact boundaries.
+**Execution note:** Implement test-first; this is pure logic with exact boundaries. Model: `opus`, dispatched as a subagent (see Execution profile).
 
 **Test scenarios:**
 - Covers AE4. After 25 minutes of frames written at 48 kHz, the earliest readable frame is exactly 10 minutes before the head.
@@ -484,6 +484,8 @@ flowchart TB
 
 **Patterns to follow:** the AudioCap tap sequence (see Sources / Research).
 
+**Execution note:** Model: `opus`, dispatched as a subagent (see Execution profile).
+
 **Test scenarios:**
 - A 1 s chunk of 44.1 kHz float audio becomes 48 000 frames at the clock-derived position.
 - Two chunks from different sources with interleaved host times land at their own clock positions in their own rings.
@@ -512,6 +514,8 @@ flowchart TB
 2. Map the ticked channels to the stored stereo pair and to the analysis sum per KTD3.
 3. When the device disappears, stop, and the history clock zero-fills the gap. When it reappears, restart with the saved ticks.
 4. If the device cannot be opened, the guitar curve is hidden and the inputs panel shows the `OSStatus`. The mix keeps running (R3).
+
+**Execution note:** Model: `opus`, dispatched as a subagent (see Execution profile).
 
 **Test scenarios:**
 - With ticks {1, 2}, history stores channel 1 left and channel 2 right, and the analysis source is the sum of both.
