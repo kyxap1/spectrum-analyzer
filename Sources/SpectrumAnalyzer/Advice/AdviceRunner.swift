@@ -29,10 +29,8 @@ actor AdviceRunner {
     private var process: Process?
 
     func run(cliPath: String, model: String, payload: String, timeout: TimeInterval = AdviceRunner.timeout) async -> AdviceOutcome {
+        let notFound = AdviceOutcome.failure("The CLI was not found at \(cliPath).")
         let expanded = (cliPath as NSString).expandingTildeInPath
-        guard FileManager.default.isExecutableFile(atPath: expanded) else {
-            return .failure("The CLI was not found at \(cliPath).")
-        }
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: expanded)
@@ -47,7 +45,7 @@ actor AdviceRunner {
         do {
             try process.run()
         } catch {
-            return .failure("The CLI was not found at \(cliPath).")
+            return notFound
         }
         self.process = process
 

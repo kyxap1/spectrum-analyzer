@@ -91,12 +91,7 @@ final class SpectrumAnalyzer {
     }
 
     private func points() -> [SpectrumPoint] {
-        zip(Self.displayFrequencies, smoothedPower).map { SpectrumPoint(frequencyHz: $0, db: dB($1)) }
-    }
-
-    private func dB(_ power: Float) -> Float {
-        guard power > 0 else { return Self.displayFloorDB }
-        return max(10 * log10(power), Self.displayFloorDB)
+        zip(Self.displayFrequencies, smoothedPower).map { SpectrumPoint(frequencyHz: $0, db: dB($1, floor: Self.displayFloorDB)) }
     }
 
     /// Runs the FFT over the `fftSize` frames ending at absolute frame

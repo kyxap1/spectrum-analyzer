@@ -47,9 +47,11 @@ final class AppModel: ObservableObject {
     private var guitarAnalyzer: SpectrumAnalyzer
     private var timer: Timer?
 
+    private static let cliPathKey = "advice.cliPath"
+    private static let rigURLKey = "advice.rigURL"
     private let adviceRunner = AdviceRunner()
-    private let cliPath = UserDefaults.standard.string(forKey: "advice.cliPath") ?? "~/bin/claude-private"
-    private let rigURL = UserDefaults.standard.string(forKey: "advice.rigURL").flatMap(URL.init(string:)) ?? RigSource.defaultURL
+    private let cliPath = UserDefaults.standard.string(forKey: AppModel.cliPathKey) ?? "~/bin/claude-private"
+    private let rigURL = UserDefaults.standard.string(forKey: AppModel.rigURLKey).flatMap(URL.init(string:)) ?? RigSource.defaultURL
     private var adviceTask: Task<Void, Never>?
 
     init() {
@@ -94,16 +96,18 @@ final class AppModel: ObservableObject {
 
     /// F2: builds the payload from both rings' whole kept history and runs
     /// the CLI. Replacing `adviceState` on cancel discards a late result.
+    /// The analysis runs inside the `Task` so `.running` reaches the screen
+    /// before the (possibly many-hop) FFT pass over the kept history.
     func requestAdvice() {
         guard adviceAvailable, adviceState != .running else { return }
         let model = adviceModel
         adviceState = .running
 
-        let mix = Payload.analyze(ring: mixRing)
-        let guitarBands = Payload.analyze(ring: guitarRing)
-        let guitar = guitarBands.analyzedSeconds > 0 ? guitarBands : nil
+        adviceTask = Task { [adviceRunner, cliPath, rigURL, mixRing, guitarRing] in
+            let mix = Payload.analyze(ring: mixRing)
+            let guitarBands = Payload.analyze(ring: guitarRing)
+            let guitar = guitarBands.analyzedSeconds > 0 ? guitarBands : nil
 
-        adviceTask = Task { [adviceRunner, cliPath, rigURL] in
             let rigResult = await RigSource.fetch(url: rigURL)
             let outcome: AdviceOutcome
             switch rigResult {

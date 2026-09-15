@@ -41,8 +41,9 @@ enum Payload {
         var frame = range.lowerBound + hopFrames
         while frame <= range.upperBound {
             defer { frame += hopFrames }
-            guard rmsDBFS(ring: ring, endFrame: frame) >= silenceFloorDBFS else { continue }
-            let (power, binHz) = fftPowerSpectrum(ring: ring, endFrame: frame, fftSize: SpectrumAnalyzer.fftSize)
+            let interleaved = ring.read(from: frame - SpectrumAnalyzer.fftSize, count: SpectrumAnalyzer.fftSize)
+            guard rmsDBFS(interleaved: interleaved) >= silenceFloorDBFS else { continue }
+            let (power, binHz) = fftPowerSpectrum(interleaved: interleaved, fftSize: SpectrumAnalyzer.fftSize)
             let bands = ThirdOctaveBands.aggregate(power: power, binHz: binHz)
             for i in 0..<sum.count { sum[i] += bands[i] }
             included += 1
@@ -63,8 +64,8 @@ enum Payload {
             lines.append("")
             lines.append("Band (Hz)\tMix (dB)\tGuitar (dB)\tGuitar - Mix (dB)")
             for i in ThirdOctaveBands.centerFrequencies.indices {
-                let mixDB = dB(mix.power[i])
-                let guitarDB = dB(guitar.power[i])
+                let mixDB = dB(mix.power[i], floor: floorDB)
+                let guitarDB = dB(guitar.power[i], floor: floorDB)
                 lines.append("\(formatHz(i))\t\(format(mixDB))\t\(format(guitarDB))\t\(format(guitarDB - mixDB))")
             }
         } else {
@@ -72,7 +73,7 @@ enum Payload {
             lines.append("")
             lines.append("Band (Hz)\tMix (dB)")
             for i in ThirdOctaveBands.centerFrequencies.indices {
-                lines.append("\(formatHz(i))\t\(format(dB(mix.power[i])))")
+                lines.append("\(formatHz(i))\t\(format(dB(mix.power[i], floor: floorDB)))")
             }
         }
         lines.append("")
@@ -85,11 +86,9 @@ enum Payload {
         return lines.joined(separator: "\n")
     }
 
-    /// RMS in dBFS over the same window `fftPowerSpectrum` would analyze at
-    /// `endFrame`, used only to decide whether the hop is silent.
-    private static func rmsDBFS(ring: HistoryRing, endFrame: Int) -> Float {
-        let n = SpectrumAnalyzer.fftSize
-        let interleaved = ring.read(from: endFrame - n, count: n)
+    /// RMS in dBFS of an already-read window, used only to decide whether the
+    /// hop is silent.
+    private static func rmsDBFS(interleaved: [Int16]) -> Float {
         var sumSquares: Float = 0
         for sample in interleaved {
             let normalized = Float(sample) / 32768
@@ -98,10 +97,6 @@ enum Payload {
         let rms = (sumSquares / Float(interleaved.count)).squareRoot()
         guard rms > 0 else { return -.infinity }
         return 20 * log10(rms)
-    }
-
-    private static func dB(_ power: Float) -> Float {
-        power > 0 ? max(10 * log10(power), floorDB) : floorDB
     }
 
     private static func format(_ db: Float) -> String {

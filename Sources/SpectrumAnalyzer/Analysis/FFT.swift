@@ -7,9 +7,15 @@ import Accelerate
 /// reads). Shared by `SpectrumAnalyzer` (mapped to log-spaced display points)
 /// and `ThirdOctaveBands` (summed into third-octave bands).
 func fftPowerSpectrum(ring: HistoryRing, endFrame: Int, fftSize: Int) -> (power: [Float], binHz: Double) {
+    fftPowerSpectrum(interleaved: ring.read(from: endFrame - fftSize, count: fftSize), fftSize: fftSize)
+}
+
+/// As above, over an already-read interleaved stereo buffer (`fftSize` frames)
+/// -- lets a caller that also needs the raw samples, such as `Payload`'s RMS
+/// silence gate, read the window once.
+func fftPowerSpectrum(interleaved: [Int16], fftSize: Int) -> (power: [Float], binHz: Double) {
     let n = fftSize
     let binHz = Double(HistoryRing.sampleRate) / Double(n)
-    let interleaved = ring.read(from: endFrame - n, count: n)
 
     var mono = [Float](repeating: 0, count: n)
     for i in 0..<n {
@@ -52,6 +58,11 @@ func fftPowerSpectrum(ring: HistoryRing, endFrame: Int, fftSize: Int) -> (power:
     }
 
     return (power, binHz)
+}
+
+/// Power in dB, clamped to `floor` (power at or below zero reads as `floor`).
+func dB(_ power: Float, floor: Float) -> Float {
+    power > 0 ? max(10 * log10(power), floor) : floor
 }
 
 /// FFT bin ranges for a set of ascending `centerFrequencies`, each bucket
