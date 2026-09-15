@@ -100,76 +100,20 @@ final class SpectrumAnalyzer {
     }
 
     /// Runs the FFT over the `fftSize` frames ending at absolute frame
-    /// `endFrame` and maps power onto the log-spaced display points. Frames
-    /// before frame 0 read back as silence (`HistoryRing.read` already zero-fills
-    /// out-of-range reads).
+    /// `endFrame` and maps power onto the log-spaced display points.
     private func powerSpectrum(ring: HistoryRing, at endFrame: Int) -> [Float] {
-        let n = Self.fftSize
-        let interleaved = ring.read(from: endFrame - n, count: n)
-
-        var mono = [Float](repeating: 0, count: n)
-        for i in 0..<n {
-            mono[i] = (Float(interleaved[i * 2]) + Float(interleaved[i * 2 + 1])) / 2 / 32768
-        }
-
-        var window = [Float](repeating: 0, count: n)
-        vDSP_hann_window(&window, vDSP_Length(n), Int32(vDSP_HANN_NORM))
-        vDSP.multiply(mono, window, result: &mono)
-
-        var magnitudes = [Float](repeating: 0, count: n / 2)
-        let log2n = vDSP_Length(log2(Double(n)))
-        guard let setup = vDSP_create_fftsetup(log2n, FFTRadix(kFFTRadix2)) else {
-            return mapToDisplayPoints(magnitudes: magnitudes)
-        }
-        defer { vDSP_destroy_fftsetup(setup) }
-
-        var realp = [Float](repeating: 0, count: n / 2)
-        var imagp = [Float](repeating: 0, count: n / 2)
-        realp.withUnsafeMutableBufferPointer { realBuf in
-            imagp.withUnsafeMutableBufferPointer { imagBuf in
-                var split = DSPSplitComplex(realp: realBuf.baseAddress!, imagp: imagBuf.baseAddress!)
-                mono.withUnsafeBufferPointer { monoBuf in
-                    monoBuf.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: n / 2) {
-                        vDSP_ctoz($0, 2, &split, 1, vDSP_Length(n / 2))
-                    }
-                }
-                vDSP_fft_zrip(setup, &split, 1, log2n, FFTDirection(FFT_FORWARD))
-
-                // vDSP's real-FFT packing already doubles the true DFT magnitude
-                // (it runs an N/2-point complex FFT under the hood), and a Hann
-                // window has a coherent gain of 0.5, so a peak bin's magnitude
-                // needs dividing by (N * 0.5 * 2) = N to read back the true
-                // amplitude of a windowed sinusoid.
-                var scale = Float(1) / Float(n)
-                vDSP_vsmul(split.realp, 1, &scale, split.realp, 1, vDSP_Length(n / 2))
-                vDSP_vsmul(split.imagp, 1, &scale, split.imagp, 1, vDSP_Length(n / 2))
-                vDSP_zvmags(&split, 1, &magnitudes, 1, vDSP_Length(n / 2))
-            }
-        }
-
-        return mapToDisplayPoints(magnitudes: magnitudes)
+        let (power, binHz) = fftPowerSpectrum(ring: ring, endFrame: endFrame, fftSize: Self.fftSize)
+        return mapToDisplayPoints(magnitudes: power, binHz: binHz)
     }
 
     /// Maps FFT bins onto the log-spaced display points by taking the loudest
-    /// bin in each point's bucket (bounded by the geometric midpoints to its
-    /// neighbors). Above a few hundred Hz a bucket spans several bins, so a
-    /// plain nearest-bin lookup would skip narrow peaks between display
-    /// points; below that a bucket is narrower than one bin, so it falls back
-    /// to the single nearest bin.
-    private func mapToDisplayPoints(magnitudes: [Float]) -> [Float] {
-        let binHz = Double(HistoryRing.sampleRate) / Double(Self.fftSize)
-        let frequencies = Self.displayFrequencies
+    /// bin in each point's bucket.
+    private func mapToDisplayPoints(magnitudes: [Float], binHz: Double) -> [Float] {
         let nyquist = Double(HistoryRing.sampleRate) / 2
-        return frequencies.indices.map { i in
-            let low = i == 0 ? 0 : (frequencies[i - 1] * frequencies[i]).squareRoot()
-            let high = i == frequencies.count - 1 ? nyquist : (frequencies[i] * frequencies[i + 1]).squareRoot()
-            let lowBin = max(0, Int((low / binHz).rounded(.up)))
-            let highBin = min(magnitudes.count - 1, Int((high / binHz).rounded(.down)))
-            guard lowBin <= highBin else {
-                let bin = min(max(Int((frequencies[i] / binHz).rounded()), 0), magnitudes.count - 1)
-                return magnitudes[bin]
-            }
-            return magnitudes[lowBin...highBin].max() ?? 0
-        }
+        return frequencyBuckets(centerFrequencies: Self.displayFrequencies,
+                                binHz: binHz,
+                                binCount: magnitudes.count,
+                                nyquist: nyquist)
+            .map { magnitudes[$0].max() ?? 0 }
     }
 }
