@@ -193,7 +193,7 @@ stateDiagram-v2
 - KTD10. **Ad-hoc signature with a designated requirement pinned to the bundle identifier.** `bundle.sh` signs ad-hoc with the requirement `designated => identifier "pro.kyxap.SpectrumAnalyzer"`. The default ad-hoc requirement pins the cdhash, which changes on every build. TCC stores the designated requirement with each grant, and `brew upgrade` carries the Gatekeeper approval forward only when the new app satisfies the old one's requirement. The fallback, a self-signed code-signing certificate kept in GitHub secrets, needs the user's consent (Goal Capsule stop condition). (session-settled: user-approved — chosen over default ad-hoc signing: every upgrade would need "Open Anyway" and re-granted permissions.) Governs R12, R13, R14.
 - KTD11. **GitHub Actions runs only on version tags.** On a `v*` tag, the workflow on `macos-26` runs `swift test`, bundles with the version from the tag, zips with `ditto`, publishes a GitHub Release with `gh`, and updates the cask on `master` with `GITHUB_TOKEN`. (session-settled: user-directed — chosen over CI on every push: saves GitHub Actions minutes; builds and tests run locally.) Governs R12.
 - KTD12. **The cask lives in this repository**, in `Casks/spectrum-analyzer.rb`, and the user taps it with `brew tap kyxap1/spectrum-analyzer https://github.com/kyxap1/spectrum-analyzer`. The cask is versioned rather than `:latest` so that plain `brew upgrade` picks up new releases. (session-settled: user-approved — chosen over a separate `homebrew-tap` repository: no second repository or token.) Governs R13.
-- KTD13. **The AI request runs the Claude CLI as a child process.** The app starts the CLI at an absolute path from settings, `~/bin/claude-private` by default, because apps launched from the Dock do not get the shell's `PATH`. The flags are `-p --model <sonnet|opus> --tools "" --safe-mode --output-format json`, and the payload goes in on stdin. `--safe-mode` keeps the user's hooks, `CLAUDE.md` and plugins out of the answer, and `--tools ""` leaves the model nothing to do but read the payload. A 180 s timeout and a Cancel button bound the call. The JSON output also reports token usage, which the answer header shows. Governs R16, R18.
+- KTD13. **The AI request runs the Claude CLI as a child process.** The app starts the CLI at a path from settings, `~/bin/claude-private` by default, with `~` expanded, because apps launched from the Dock do not get the shell's `PATH`. The default is the user's profile wrapper, and the profile's settings, `CLAUDE.md`, hooks and plugins all apply, so there is no `--safe-mode`. The child gets `~/bin`, `~/.local/bin` and `/opt/homebrew/bin` in front of the app's `PATH`, so profile hooks find their tools. The flags are `-p --model <sonnet|opus> --tools "" --output-format json`, and the payload goes in on stdin. `--tools ""` leaves the model nothing to do but read the payload. A 180 s timeout and a Cancel button bound the call. The JSON output also reports token usage, which the answer header shows. Governs R16, R18.
 - KTD14. **The payload holds third-octave averages over the whole history, not the display curve.** Mean power over 31 ISO third-octave bands from 20 Hz to 20 kHz goes into a text table in dB with mix, guitar and difference columns. It is computed at a coarse hop of one FFT every 0.5 s. Frames quieter than a −70 dBFS RMS floor are left out of each source's average, so pauses and a disconnected interface do not drag the levels down. The payload reports how many seconds of each source went into the average. Governs R16, R18.
 - KTD15. **The rig text is fetched at request time.** The app fetches `https://rig.kyxap.pro/raw` with a 10 s timeout. It caches the last good copy in Application Support and falls back to it, noting the cache date in the payload. The URL is a setting. Governs R17.
 
@@ -580,8 +580,10 @@ flowchart TB
 2. The controls bar holds pause, play and resume live, a scrubber over the kept range with m:ss labels, Reset, the pin toggle and the smoothing picker.
 3. The inputs panel holds a device menu and a channel checklist.
 4. `Permissions` maps both statuses to banners. Each banner names the permission and has a button that opens System Settings.
+5. On launch, a not-determined microphone status triggers `AVCaptureDevice.requestAccess(for: .audio)` before the interface IOProc starts, so the prompt appears at once instead of the input silently returning zeros.
 
 **Test scenarios:**
+- A not-determined microphone status requests access once; authorized and denied statuses do not.
 - Microphone denied with system audio authorized shows one banner naming Microphone.
 - Both denied shows two banners.
 - With the private check unavailable, no system audio banner appears.
@@ -667,12 +669,15 @@ flowchart TB
 
 **Approach:**
 1. `AdviceRunner` starts the CLI per KTD13, writes the payload to stdin, parses the JSON result, and enforces the timeout and Cancel.
-2. `AdvicePanel` renders the answer as markdown, shows the model and the token usage, and shows errors in place. The settings hold the CLI path and the rig URL.
+2. `AdvicePanel` renders the answer as markdown, shows the model and the token usage, and shows errors in place. The button is disabled while the kept history is empty. The settings hold the CLI path, `~/bin/claude-private` by default, and the rig URL.
 
 **Test scenarios:**
 - Tests use a stub CLI script written to a temporary directory.
 - A stub printing valid JSON yields the answer text and parsed usage.
-- Picking Opus passes `--model opus` along with `-p`, `--tools ""` and `--safe-mode`.
+- Picking Opus passes `--model opus` along with `-p` and `--tools ""`, and no `--safe-mode`.
+- The stub sees `~/bin`, `~/.local/bin` and `/opt/homebrew/bin` at the front of its `PATH`.
+- A CLI path set to `~/…` is expanded to the home directory.
+- With an empty history the button is disabled; after one write it is enabled.
 - The stub receives on stdin exactly the payload that U9 built.
 - A stub exiting with status 1 shows the tail of its stderr.
 - Covers AE7. A missing CLI path shows that the CLI was not found at that path.
@@ -686,7 +691,7 @@ flowchart TB
 
 ## Verification Contract
 
-Everything runs locally on the host (KTD11). The release workflow repeats `swift test` and the bundle step on tags.
+Everything runs locally on the host (KTD11). The release workflow repeats `swift test` and the bundle step on tags. Every manual check runs on the `.app` from `scripts/bundle.sh`, never on `swift run`: a bare binary has no bundle id or usage descriptions, so TCC grants go to Terminal and capture behaves differently.
 
 | Gate | Check | Applies to |
 |---|---|---|
