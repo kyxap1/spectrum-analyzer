@@ -28,11 +28,16 @@ final class AppModel: ObservableObject {
     @Published var devices: [AudioInputDevice] = []
     @Published var selectedDeviceUID: String?
     @Published var ticks: Set<Int> = []
+    @Published var inputFailure: OSStatus?
     @Published var adviceState: AdviceState = .idle
     @Published var adviceModel = "sonnet"
     @Published var adviceAvailable = false
 
     private let audioDevices = AudioDevices()
+    /// Shared by `MixTap` and `InterfaceInput` so their HAL setup/teardown
+    /// never runs concurrently — CoreAudio's aggregate-device create/destroy
+    /// wedges coreaudiod when two devices race it from separate threads.
+    private let audioHALQueue = DispatchQueue(label: "pro.kyxap.SpectrumAnalyzer.audioHAL")
     private let mixQueue = SPSCQueue(slotCount: 64, slotCapacity: 16_384)
     private let guitarQueue = SPSCQueue(slotCount: 64, slotCapacity: 16_384)
     private let mixRing = HistoryRing()
@@ -55,8 +60,12 @@ final class AppModel: ObservableObject {
     private var adviceTask: Task<Void, Never>?
 
     init() {
-        mixTap = MixTap(queue: mixQueue, outputDeviceUID: { [audioDevices] in audioDevices.defaultOutputDeviceUID })
-        interfaceInput = InterfaceInput(queue: guitarQueue, inputDevices: { [audioDevices] in audioDevices.inputDevices })
+        mixTap = MixTap(queue: mixQueue,
+                        outputDeviceUID: { [audioDevices] in audioDevices.defaultOutputDeviceUID },
+                        halQueue: audioHALQueue)
+        interfaceInput = InterfaceInput(queue: guitarQueue,
+                                        inputDevices: { [audioDevices] in audioDevices.inputDevices },
+                                        halQueue: audioHALQueue)
         player = Player(mixRing: mixRing, guitarRing: guitarRing)
         session = Session(mixRing: mixRing, guitarRing: guitarRing, player: player)
         mixWorker = CaptureWorker(queue: mixQueue, ring: mixRing, clock: { [session] in session.clock }, isLive: { [session] in session.isLive })
@@ -68,9 +77,17 @@ final class AppModel: ObservableObject {
         interfaceInput.onFormatChange = { [guitarWorker] format in guitarWorker.sourceFormat = format }
         interfaceInput.onStatusChange = { [weak self] _ in self?.tick() }
         mixTap.onStatusChange = { [weak self] _ in self?.tick() }
-        audioDevices.onChange = { [mixTap, interfaceInput] in
-            mixTap.rebuild()
-            interfaceInput.deviceListChanged()
+        // CoreAudio delivers these mid-notification; rebuilding devices
+        // synchronously here re-enters the HAL and deadlocks the main thread.
+        // Defer to the next run loop turn so the notification settles first.
+        audioDevices.onDefaultOutputChange = { [mixTap] in
+            Task { @MainActor in mixTap.rebuild() }
+        }
+        audioDevices.onDeviceListChange = { [weak self, interfaceInput] in
+            Task { @MainActor in
+                interfaceInput.deviceListChanged()
+                self?.refreshDevices()
+            }
         }
         session.onStateChange = { [weak self] in self?.syncSessionState() }
 
@@ -78,11 +95,16 @@ final class AppModel: ObservableObject {
         mixTap.start()
         interfaceInput.start()
         refreshDeviceList()
+        refreshDevices()
         syncSessionState()
 
-        timer = Timer.scheduledTimer(withTimeInterval: SpectrumAnalyzer.liveHopSeconds, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: SpectrumAnalyzer.liveHopSeconds, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
+        // The capture queues hold under a second of audio, so draining must
+        // keep running while a menu is open or the window is being resized.
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
     }
 
     func pause() { session.pause() }
@@ -139,9 +161,21 @@ final class AppModel: ObservableObject {
     }
 
     private func refreshDeviceList() {
-        devices = audioDevices.inputDevices
         selectedDeviceUID = interfaceInput.deviceUID
         ticks = Set(interfaceInput.ticks)
+    }
+
+    /// `AudioDevices.inputDevices` makes CoreAudio HAL calls, which must never
+    /// run on the main thread while `audioHALQueue` may be mid device
+    /// create/start/destroy — CoreAudio's internal HAL lock is process-wide,
+    /// so a concurrent call from main blocks until the HAL op completes,
+    /// which can take tens of seconds and freezes the whole UI. Reading it
+    /// here, on `audioHALQueue`, serializes it behind any in-flight HAL work.
+    private func refreshDevices() {
+        audioHALQueue.async { [audioDevices] in
+            let devices = audioDevices.inputDevices
+            Task { @MainActor [weak self] in self?.devices = devices }
+        }
     }
 
     private func resetAnalyzers() {
@@ -167,6 +201,7 @@ final class AppModel: ObservableObject {
         let head = session.currentHead
         mixPoints = mixAnalyzer.advance(ring: mixRing, to: head)
         guitarPoints = interfaceInput.status == .running ? guitarAnalyzer.advance(ring: guitarRing, to: head) : nil
+        if case .unavailable(let status) = interfaceInput.status { inputFailure = status } else { inputFailure = nil }
         banners = statusBanners(microphone: Permissions.microphoneStatus(),
                                 systemAudioRecording: Permissions.systemAudioRecordingStatus(),
                                 mix: mixTap.status)
@@ -184,6 +219,7 @@ struct ContentView: View {
             InputsPanel(devices: model.devices,
                        selectedDeviceUID: model.selectedDeviceUID,
                        ticks: model.ticks,
+                       failure: model.inputFailure,
                        onSelect: model.selectInput)
             SpectrumGraphView(mixPoints: model.mixPoints, guitarPoints: model.guitarPoints)
             ControlsBar(state: model.state,

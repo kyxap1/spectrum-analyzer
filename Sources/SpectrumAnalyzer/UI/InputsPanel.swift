@@ -5,6 +5,8 @@ struct InputsPanel: View {
     let devices: [AudioInputDevice]
     let selectedDeviceUID: String?
     let ticks: Set<Int>
+    /// Why the selected device could not be opened, nil while it runs or is off.
+    let failure: OSStatus?
     let onSelect: (String?, Set<Int>) -> Void
 
     var body: some View {
@@ -22,6 +24,11 @@ struct InputsPanel: View {
                     Toggle("\(channel)", isOn: channelBinding(channel))
                         .toggleStyle(.button)
                 }
+            }
+
+            if let failure {
+                Text("Input unavailable (OSStatus \(failure))")
+                    .foregroundStyle(.red)
             }
         }
         .padding(8)

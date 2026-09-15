@@ -99,13 +99,19 @@ func mixGuitarStereo(_ block: [Float], channels: Int, ticks: [Int]) -> [Float]? 
 ///
 /// `AVAudioEngine`'s input node follows the default input device, so the device
 /// is opened directly. Selection and ticks persist, and the owner calls
-/// `deviceListChanged()` from `AudioDevices.onChange` so the capture follows the
-/// interface across unplugging and replugging.
-final class InterfaceInput {
+/// `deviceListChanged()` from `AudioDevices.onDeviceListChange` so the capture
+/// follows the interface across unplugging and replugging.
+///
+/// `@unchecked Sendable`: `device`/`ioProc`/`mixed`/`bases` are touched only on
+/// `halQueue`, everything else only on the main queue — the two never share a
+/// mutable property, so crossing threads to call `teardown()`/`build()` is safe.
+final class InterfaceInput: @unchecked Sendable {
     let queue: SPSCQueue
     var onStatusChange: ((MixTapStatus) -> Void)?
     var onFormatChange: ((AVAudioFormat) -> Void)?
 
+    /// Only ever set via `setStatus(_:)` on the main queue, so `didSet` can
+    /// call `onStatusChange` directly without crossing actors.
     private(set) var status: MixTapStatus = .stopped {
         didSet {
             guard status != oldValue else { return }
@@ -116,6 +122,13 @@ final class InterfaceInput {
     private(set) var deviceUID: String?
     private(set) var ticks: [Int]
 
+    /// `AudioDeviceStart`-class calls can block for a long time on HAL/driver
+    /// contention; teardown()/build() run here, off the caller's thread, so a
+    /// stall never freezes the UI. Only this queue touches
+    /// `device`/`ioProc`/`mixed`/`bases`. Shared with `MixTap` so the two
+    /// never issue HAL device create/destroy calls concurrently — that
+    /// concurrency wedged coreaudiod at launch.
+    private let halQueue: DispatchQueue
     private let store: KeyValueStore
     private let inputDevices: () -> [AudioInputDevice]
     private var device = kAudioObjectUnknown
@@ -139,16 +152,27 @@ final class InterfaceInput {
 
     init(queue: SPSCQueue,
          store: KeyValueStore = UserDefaults.standard,
-         inputDevices: @escaping () -> [AudioInputDevice]) {
+         inputDevices: @escaping () -> [AudioInputDevice],
+         halQueue: DispatchQueue) {
         self.queue = queue
         self.store = store
         self.inputDevices = inputDevices
+        self.halQueue = halQueue
         deviceUID = store.object(forKey: InterfaceInput.deviceKey) as? String
         ticks = store.object(forKey: InterfaceInput.ticksKey) as? [Int] ?? []
     }
 
     deinit {
-        teardown()
+        // Snapshot the resources instead of capturing `self` in the closure:
+        // self's refcount is already 0 here, and retaining it to call an
+        // instance method from inside `sync` would trap.
+        let device = self.device
+        let ioProc = self.ioProc
+        let mixed = self.mixed
+        let bases = self.bases
+        halQueue.sync {
+            InterfaceInput.releaseResources(device: device, ioProc: ioProc, mixed: mixed, bases: bases)
+        }
     }
 
     var selectedDevice: AudioInputDevice? {
@@ -166,42 +190,57 @@ final class InterfaceInput {
         self.ticks = ticks
         store.set(deviceUID, forKey: InterfaceInput.deviceKey)
         store.set(ticks, forKey: InterfaceInput.ticksKey)
-        rebuild()
+        scheduleRebuild(deviceUID: deviceUID, ticks: ticks)
     }
 
     func start() {
-        rebuild()
+        scheduleRebuild(deviceUID: deviceUID, ticks: ticks)
     }
 
     func stop() {
-        teardown()
-        status = .stopped
+        halQueue.async { [weak self] in
+            self?.teardown()
+            self?.setStatus(.stopped)
+        }
     }
 
     /// Call on a device-list change: starts capture once the selected device is
     /// back and stops it when it is gone, leaving the mix source untouched.
     func deviceListChanged() {
-        rebuild()
+        scheduleRebuild(deviceUID: deviceUID, ticks: ticks)
     }
 
-    private func rebuild() {
+    /// Snapshots the selection on the caller's (main) thread so `rebuild()`
+    /// never reads `deviceUID`/`ticks` from `halQueue` while `select()` can
+    /// be writing them on main.
+    private func scheduleRebuild(deviceUID: String?, ticks: [Int]) {
+        halQueue.async { [weak self] in self?.rebuild(deviceUID: deviceUID, ticks: ticks) }
+    }
+
+    private func rebuild(deviceUID: String?, ticks: [Int]) {
         teardown()
-        guard let device = selectedDevice else {
-            status = .stopped
+        guard let device = deviceUID.flatMap({ uid in inputDevices().first { $0.uid == uid } }) else {
+            setStatus(.stopped)
             return
         }
         let slots = channelSlots(ticks: ticks, layout: streamLayout(of: device.id))
         // Nothing ticked: the guitar curve stays hidden and the mix keeps going.
         guard !slots.isEmpty else {
-            status = .stopped
+            setStatus(.stopped)
             return
         }
         if let failure = build(device: device, slots: slots) {
             teardown()
-            status = .unavailable(failure)
+            setStatus(.unavailable(failure))
         } else {
-            status = .running
+            setStatus(.running)
         }
+    }
+
+    /// Hops to the main queue so `status`'s `didSet` (and the `onStatusChange`
+    /// it calls) never runs on `halQueue`.
+    private func setStatus(_ newStatus: MixTapStatus) {
+        DispatchQueue.main.async { [weak self] in self?.status = newStatus }
     }
 
     /// Returns the `OSStatus` of the first step that failed, nil on success.
@@ -218,7 +257,9 @@ final class InterfaceInput {
                                          channels: 2,
                                          interleaved: true)
         else { return kAudioHardwareUnknownPropertyError }
-        onFormatChange?(format)
+        // Must land before AudioDeviceStart below, so the IOProc never pushes
+        // samples the consumer would read with the previous device's format.
+        DispatchQueue.main.sync { [weak self] in self?.onFormatChange?(format) }
 
         let mixed = UnsafeMutableBufferPointer<Float>.allocate(capacity: InterfaceInput.maxFrames * 2)
         mixed.initialize(repeating: 0)
@@ -252,21 +293,29 @@ final class InterfaceInput {
         }
         guard status == noErr else { return status }
 
-        let startStatus = AudioDeviceStart(device.id, ioProc)
+        let startStatus = audioDeviceStart(device.id, ioProc)
         return startStatus == noErr ? nil : startStatus
     }
 
     private func teardown() {
+        InterfaceInput.releaseResources(device: device, ioProc: ioProc, mixed: mixed, bases: bases)
+        ioProc = nil
+        device = kAudioObjectUnknown
+        mixed = nil
+        bases = nil
+    }
+
+    /// Free function so `deinit` can call it without capturing `self`.
+    private static func releaseResources(device: AudioObjectID,
+                                         ioProc: AudioDeviceIOProcID?,
+                                         mixed: UnsafeMutableBufferPointer<Float>?,
+                                         bases: UnsafeMutableBufferPointer<UnsafePointer<Float>?>?) {
         if let ioProc {
             AudioDeviceStop(device, ioProc)
             AudioDeviceDestroyIOProcID(device, ioProc)
         }
-        ioProc = nil
-        device = kAudioObjectUnknown
         mixed?.deallocate()
-        mixed = nil
         bases?.deallocate()
-        bases = nil
     }
 
     /// Channels per input buffer, which is how the IOProc's buffer list is laid

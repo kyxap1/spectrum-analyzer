@@ -1,6 +1,34 @@
 import CoreAudio
 import Foundation
 
+/// `AudioDeviceStart` can block forever if the driver's IO thread never
+/// reports "running" (observed: a misbehaving mic driver wedges it
+/// indefinitely). Running it on its own thread and waiting with a deadline
+/// means one stuck device fails fast instead of permanently blocking
+/// `halQueue` — and every rebuild queued behind it — for the rest of the
+/// app's life. On timeout the call is abandoned (CoreAudio gives no way to
+/// cancel it) to run out on its own thread; the deadline only bounds how
+/// long the caller waits for it.
+func audioDeviceStart(_ device: AudioObjectID,
+                      _ ioProc: AudioDeviceIOProcID?,
+                      timeout: TimeInterval = 5) -> OSStatus {
+    final class ResultBox: @unchecked Sendable {
+        // Written once on the detached thread, read only after `semaphore`
+        // signals — that ordering is the synchronization.
+        var status: OSStatus = noErr
+    }
+    let semaphore = DispatchSemaphore(value: 0)
+    let box = ResultBox()
+    DispatchQueue.global(qos: .userInitiated).async {
+        box.status = AudioDeviceStart(device, ioProc)
+        semaphore.signal()
+    }
+    guard semaphore.wait(timeout: .now() + timeout) == .success else {
+        return kAudioHardwareUnspecifiedError
+    }
+    return box.status
+}
+
 struct AudioInputDevice: Equatable, Identifiable {
     let id: AudioObjectID
     let uid: String
@@ -10,16 +38,25 @@ struct AudioInputDevice: Equatable, Identifiable {
 
 /// The system's current default output device and its capturable input
 /// devices, re-read on every hardware change.
-final class AudioDevices {
-    /// Called on the main queue after the default output device or the device
-    /// list changed. Consumers re-read the properties they care about.
-    var onChange: (() -> Void)?
+///
+/// `@unchecked Sendable`: `listeners` is touched only on the main queue
+/// (init/deinit); every other method only makes CoreAudio HAL calls and
+/// touches no shared mutable state, so calling them from `audioHALQueue` is
+/// safe.
+final class AudioDevices: @unchecked Sendable {
+    /// Called on the main queue after the default output device changed.
+    var onDefaultOutputChange: (() -> Void)?
+    /// Called on the main queue after the device list changed. MixTap's own
+    /// aggregate device create/destroy is itself a device-list change, so
+    /// this must stay separate from `onDefaultOutputChange` — routing it
+    /// there would have MixTap's rebuild retrigger itself forever.
+    var onDeviceListChange: (() -> Void)?
 
     private var listeners: [(AudioObjectPropertyAddress, AudioObjectPropertyListenerBlock)] = []
 
     init() {
-        listen(kAudioHardwarePropertyDefaultOutputDevice)
-        listen(kAudioHardwarePropertyDevices)
+        listen(kAudioHardwarePropertyDefaultOutputDevice) { [weak self] in self?.onDefaultOutputChange?() }
+        listen(kAudioHardwarePropertyDevices) { [weak self] in self?.onDeviceListChange?() }
     }
 
     deinit {
@@ -45,7 +82,7 @@ final class AudioDevices {
     var inputDevices: [AudioInputDevice] {
         deviceIDs.compactMap { id in
             let channels = channelCount(of: id, scope: kAudioObjectPropertyScopeInput)
-            guard channels > 0, let uid = uid(of: id) else { return nil }
+            guard channels > 0, !isPrivateAggregate(id), let uid = uid(of: id) else { return nil }
             let name: CFString? = value(id, kAudioObjectPropertyName)
             return AudioInputDevice(id: id,
                                     uid: uid,
@@ -72,6 +109,14 @@ final class AudioDevices {
         return uid as String?
     }
 
+    /// Private aggregates — `MixTap`'s own device and the per-process one the
+    /// HAL creates — are visible only to this process and get a new UID every
+    /// launch, so a saved selection of one never matches again.
+    private func isPrivateAggregate(_ device: AudioObjectID) -> Bool {
+        let composition: CFDictionary? = value(device, kAudioAggregateDevicePropertyComposition)
+        return (composition as? [String: Any])?[kAudioAggregateDeviceIsPrivateKey] as? Int == 1
+    }
+
     private func channelCount(of device: AudioObjectID, scope: AudioObjectPropertyScope) -> Int {
         var address = Self.address(kAudioDevicePropertyStreamConfiguration, scope: scope)
         var size: UInt32 = 0
@@ -96,11 +141,9 @@ final class AudioDevices {
         return result.move()
     }
 
-    private func listen(_ selector: AudioObjectPropertySelector) {
+    private func listen(_ selector: AudioObjectPropertySelector, handler: @escaping () -> Void) {
         var address = Self.address(selector)
-        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-            self?.onChange?()
-        }
+        let block: AudioObjectPropertyListenerBlock = { _, _ in handler() }
         guard AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject),
                                                   &address,
                                                   DispatchQueue.main,

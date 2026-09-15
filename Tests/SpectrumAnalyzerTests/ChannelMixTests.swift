@@ -1,3 +1,4 @@
+import Dispatch
 import Testing
 
 @testable import SpectrumAnalyzer
@@ -18,7 +19,8 @@ private final class FakeStore: KeyValueStore {
 private func input(store: KeyValueStore, devices: [AudioInputDevice] = []) -> InterfaceInput {
     InterfaceInput(queue: SPSCQueue(slotCount: 2, slotCapacity: 16),
                    store: store,
-                   inputDevices: { devices })
+                   inputDevices: { devices },
+                   halQueue: DispatchQueue(label: "test.guitarHAL"))
 }
 
 @Test func stereoTickSplitsTheTwoChannelsLeftAndRight() {
