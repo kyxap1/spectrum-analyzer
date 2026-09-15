@@ -295,13 +295,13 @@ Sources/SpectrumAnalyzer/
   History/HistoryClock.swift
   History/SPSCQueue.swift
   Analysis/Spectrum.swift
-  Analysis/Bands.swift
   Replay/Player.swift
   Permissions/Permissions.swift
   UI/SpectrumGraph.swift
   UI/ControlsBar.swift
   UI/InputsPanel.swift
   UI/AdvicePanel.swift
+  Advice/Bands.swift
   Advice/Payload.swift
   Advice/RigSource.swift
   Advice/AdviceRunner.swift
@@ -365,7 +365,7 @@ flowchart TB
 | U6 | Session state and replay | `App/Session.swift`, `Replay/Player.swift` | U3, U4 |
 | U7 | Main window and permissions | `Sources/SpectrumAnalyzer/UI/`, `Permissions/Permissions.swift` | U5, U6 |
 | U8 | Release workflow and cask | `.github/workflows/release.yml`, `Casks/spectrum-analyzer.rb` | U1, U7 |
-| U9 | AI payload and rig source (optional) | `Advice/Payload.swift`, `Advice/RigSource.swift` | U3 |
+| U9 | AI payload and rig source (optional) | `Advice/Bands.swift`, `Advice/Payload.swift`, `Advice/RigSource.swift` | U3 |
 | U10 | AI request and panel (optional) | `Advice/AdviceRunner.swift`, `UI/AdvicePanel.swift` | U7, U9 |
 
 ### U1. Package, bundle and signing
@@ -437,21 +437,19 @@ flowchart TB
 
 ### U3. Spectrum analysis
 
-**Goal:** Smoothed spectra per source at any head, as display points and as third-octave bands.
+**Goal:** Smoothed spectra per source at any head, as display points.
 
-**Requirements:** R5, R6; KTD5. The bands are reused by U9 (KTD14).
+**Requirements:** R5, R6; KTD5.
 
 **Dependencies:** U2.
 
 **Files:**
 - `Sources/SpectrumAnalyzer/Analysis/Spectrum.swift`
-- `Sources/SpectrumAnalyzer/Analysis/Bands.swift`
 - `Tests/SpectrumAnalyzerTests/SpectrumTests.swift`
 
 **Approach:**
 1. For each source, sum the power of both channels after the FFT, then map it to the log-spaced display points.
 2. Smoothing and the incremental-versus-re-warm head logic follow KTD5.
-3. `Bands` aggregates power into the 31 ISO third-octave bands.
 
 **Execution note:** Implement test-first against synthetic signals.
 
@@ -461,7 +459,6 @@ flowchart TB
 - Silence yields the display floor, never NaN or −inf.
 - A step from silence to a tone reaches about 63% of the final power after 3 s of incremental advance with τ = 3 s.
 - Jumping the head 5 minutes back gives the same result as analyzing only the τ seconds before the new head, with nothing left over from the old position.
-- A 100 Hz tone lands in the 100 Hz third-octave band, and white noise rises about 3 dB per band.
 
 **Verification:** `swift test` passes for the spectrum tests.
 
@@ -635,17 +632,20 @@ flowchart TB
 **Dependencies:** U3.
 
 **Files:**
+- `Sources/SpectrumAnalyzer/Advice/Bands.swift`
 - `Sources/SpectrumAnalyzer/Advice/Payload.swift`
 - `Sources/SpectrumAnalyzer/Advice/RigSource.swift`
 - `Tests/SpectrumAnalyzerTests/PayloadTests.swift`
 
 **Approach:**
-1. `Payload` walks the kept history at the KTD14 hop, averages band power per source above the silence floor, and renders a fixed instruction, the band table, the analyzed seconds and the rig text.
-2. `RigSource` fetches, caches and falls back per KTD15.
+1. `Bands` aggregates the U3 FFT power into the 31 ISO third-octave bands.
+2. `Payload` walks the kept history at the KTD14 hop, averages band power per source above the silence floor, and renders a fixed instruction, the band table, the analyzed seconds and the rig text.
+3. `RigSource` fetches, caches and falls back per KTD15.
 
 **Execution note:** Implement test-first; the payload is pure logic over the rings.
 
 **Test scenarios:**
+- A 100 Hz tone lands in the 100 Hz third-octave band, and white noise rises about 3 dB per band.
 - Covers AE6. With 4 minutes of history since Reset, the payload reports 240 s analyzed per source and has 31 band rows with mix, guitar and difference columns.
 - 2 minutes of guitar followed by 2 minutes of silence give the same guitar band levels as the 2 minutes alone, and the payload reports 120 s of guitar.
 - With no guitar audio at all, the payload says the guitar was not captured and carries the mix only.
