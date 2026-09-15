@@ -28,6 +28,9 @@ final class AppModel: ObservableObject {
     @Published var devices: [AudioInputDevice] = []
     @Published var selectedDeviceUID: String?
     @Published var ticks: Set<Int> = []
+    @Published var adviceState: AdviceState = .idle
+    @Published var adviceModel = "sonnet"
+    @Published var adviceAvailable = false
 
     private let audioDevices = AudioDevices()
     private let mixQueue = SPSCQueue(slotCount: 64, slotCapacity: 16_384)
@@ -43,6 +46,11 @@ final class AppModel: ObservableObject {
     private var mixAnalyzer: SpectrumAnalyzer
     private var guitarAnalyzer: SpectrumAnalyzer
     private var timer: Timer?
+
+    private let adviceRunner = AdviceRunner()
+    private let cliPath = UserDefaults.standard.string(forKey: "advice.cliPath") ?? "~/bin/claude-private"
+    private let rigURL = UserDefaults.standard.string(forKey: "advice.rigURL").flatMap(URL.init(string:)) ?? RigSource.defaultURL
+    private var adviceTask: Task<Void, Never>?
 
     init() {
         mixTap = MixTap(queue: mixQueue, outputDeviceUID: { [audioDevices] in audioDevices.defaultOutputDeviceUID })
@@ -84,6 +92,42 @@ final class AppModel: ObservableObject {
         session.scrub(to: seconds * HistoryRing.sampleRate)
     }
 
+    /// F2: builds the payload from both rings' whole kept history and runs
+    /// the CLI. Replacing `adviceState` on cancel discards a late result.
+    func requestAdvice() {
+        guard adviceAvailable, adviceState != .running else { return }
+        let model = adviceModel
+        adviceState = .running
+
+        let mix = Payload.analyze(ring: mixRing)
+        let guitarBands = Payload.analyze(ring: guitarRing)
+        let guitar = guitarBands.analyzedSeconds > 0 ? guitarBands : nil
+
+        adviceTask = Task { [adviceRunner, cliPath, rigURL] in
+            let rigResult = await RigSource.fetch(url: rigURL)
+            let outcome: AdviceOutcome
+            switch rigResult {
+            case .failure(.unavailable(let reason)):
+                outcome = .failure(reason)
+            case .success(let rig):
+                let payload = Payload.render(mix: mix, guitar: guitar, rig: rig)
+                outcome = await adviceRunner.run(cliPath: cliPath, model: model, payload: payload)
+            }
+            guard !Task.isCancelled else { return }
+            switch outcome {
+            case .success(let answer, let usage): self.adviceState = .answer(text: answer, usage: usage, model: model)
+            case .failure(let message): self.adviceState = .error(message)
+            }
+        }
+    }
+
+    func cancelAdvice() {
+        adviceTask?.cancel()
+        adviceTask = nil
+        adviceState = .idle
+        Task { [adviceRunner] in await adviceRunner.cancel() }
+    }
+
     func selectInput(deviceUID: String?, ticks: Set<Int>) {
         self.selectedDeviceUID = deviceUID
         self.ticks = ticks
@@ -107,6 +151,7 @@ final class AppModel: ObservableObject {
         let upper = max(mixRing.head, HistoryRing.sampleRate) / HistoryRing.sampleRate
         let lower = mixRing.range.lowerBound / HistoryRing.sampleRate
         scrubRangeSeconds = lower...max(lower, upper)
+        adviceAvailable = AdviceAvailability.isAvailable(historyRange: mixRing.range)
     }
 
     private func tick() {
@@ -147,6 +192,11 @@ struct ContentView: View {
                        onResumeLive: model.resumeLive,
                        onScrub: model.scrub,
                        onReset: model.reset)
+            AdvicePanel(state: model.adviceState,
+                       isAvailable: model.adviceAvailable,
+                       model: $model.adviceModel,
+                       onRequest: model.requestAdvice,
+                       onCancel: model.cancelAdvice)
         }
         .frame(minWidth: 640, minHeight: 420)
     }
