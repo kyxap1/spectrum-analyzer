@@ -45,7 +45,8 @@ actor AdviceRunner {
         do {
             try process.run()
         } catch {
-            return notFound
+            guard FileManager.default.fileExists(atPath: expanded) else { return notFound }
+            return .failure("The CLI at \(cliPath) could not be started: \(error.localizedDescription)")
         }
         self.process = process
 

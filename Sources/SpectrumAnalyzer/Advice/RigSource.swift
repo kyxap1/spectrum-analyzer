@@ -7,8 +7,14 @@ struct RigText {
     let cachedAt: Date?
 }
 
-enum RigFetchError: Error, Equatable {
+enum RigFetchError: Error, Equatable, LocalizedError {
     case unavailable(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .unavailable(let reason): reason
+        }
+    }
 }
 
 /// The network seam. `URLSession` implements it directly.
@@ -71,13 +77,16 @@ enum RigSource {
     static func fetch(url: URL = defaultURL,
                       fetcher: RigFetching = URLSession.shared,
                       cache: RigCaching = FileRigCache()) async -> Result<RigText, RigFetchError> {
-        if let text = try? await fetcher.fetchText(from: url, timeoutInterval: timeout) {
+        do {
+            let text = try await fetcher.fetchText(from: url, timeoutInterval: timeout)
             cache.write(text)
             return .success(RigText(markdown: text, cachedAt: nil))
+        } catch {
+            if let cached = cache.read() {
+                return .success(RigText(markdown: cached.text, cachedAt: cached.date))
+            }
+            let reason = error.localizedDescription
+            return .failure(.unavailable("The rig could not be fetched from \(url.absoluteString) (\(reason)) and no cached copy exists."))
         }
-        if let cached = cache.read() {
-            return .success(RigText(markdown: cached.text, cachedAt: cached.date))
-        }
-        return .failure(.unavailable("The rig could not be fetched from \(url.absoluteString) and no cached copy exists."))
     }
 }
