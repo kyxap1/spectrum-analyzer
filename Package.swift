@@ -7,7 +7,8 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "SpectrumAnalyzer",
-            path: "Sources/SpectrumAnalyzer"
+            path: "Sources/SpectrumAnalyzer",
+            resources: [.copy("Advice/prompt.md"), .copy("Advice/fetch-domains.txt")]
         ),
         .testTarget(
             name: "SpectrumAnalyzerTests",

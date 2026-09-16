@@ -90,3 +90,49 @@ enum RigSource {
         }
     }
 }
+
+/// The switchable pedals in the rig's `### Pedals` table and the player's
+/// current rig state sent with a request. Tuner and switch rows carry no tone.
+enum RigPedals {
+    static func names(in markdown: String) -> [String] {
+        var inSection = false
+        var pastSeparator = false
+        var names: [String] = []
+        for line in markdown.split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("#") {
+                inSection = trimmed.drop(while: { $0 == "#" }).trimmingCharacters(in: .whitespaces) == "Pedals"
+                pastSeparator = false
+                continue
+            }
+            guard inSection, trimmed.hasPrefix("|") else { continue }
+            let cells = trimmed.split(separator: "|").map { $0.trimmingCharacters(in: .whitespaces) }
+            guard cells.count >= 2 else { continue }
+            if cells[0].allSatisfy({ $0 == "-" || $0 == ":" }) {
+                pastSeparator = true
+                continue
+            }
+            let designation = cells[1].lowercased()
+            guard pastSeparator, !designation.contains("tuner"), !designation.contains("switch") else { continue }
+            names.append(cells[0])
+        }
+        return names
+    }
+
+    /// Nil when there is neither a pedal list nor a note to report.
+    static func state(pedals: [String], engaged: Set<String>, notes: String) -> String? {
+        let notes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !pedals.isEmpty || !notes.isEmpty else { return nil }
+        var lines = ["Current rig state (overrides the rig description):"]
+        if !pedals.isEmpty {
+            let on = pedals.filter(engaged.contains)
+            lines.append(on.isEmpty
+                ? "All pedals in the Pedals table are bypassed."
+                : "Pedals engaged now: \(on.joined(separator: ", ")). The other pedals in the Pedals table are bypassed.")
+        }
+        if !notes.isEmpty {
+            lines.append("Player notes: \(notes)")
+        }
+        return lines.joined(separator: "\n")
+    }
+}

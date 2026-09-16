@@ -113,10 +113,15 @@ final class Player: ReplayPlayer, @unchecked Sendable {
         onReachedEnd?()
     }
 
-    @objc private func engineConfigurationChanged() {
-        // An output device switch invalidates the engine's connections; restart
-        // playback at the position already reached (KTD7).
-        guard mixNode.isPlaying else { return }
-        play(from: position, until: mixRing.head)
+    /// AVAudioEngine posts this on a background queue; the player lives on main.
+    @objc nonisolated private func engineConfigurationChanged() {
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                // An output device switch invalidates the engine's connections; restart
+                // playback at the position already reached (KTD7).
+                guard self.mixNode.isPlaying else { return }
+                self.play(from: self.position, until: self.mixRing.head)
+            }
+        }
     }
 }

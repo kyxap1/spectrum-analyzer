@@ -68,6 +68,16 @@ struct HistoryTests {
         #expect(ring.read(from: 0, count: 4) == ramp(from: 1, count: 4))
     }
 
+    @Test("a chunk straddling frame 0 keeps only its non-negative part")
+    func writeBeforeZeroDropsNegativePart() {
+        let ring = HistoryRing(capacity: 8)
+        ring.write(at: -2, ramp(from: 1, count: 4))
+        #expect(ring.head == 2)
+        #expect(ring.read(from: 0, count: 2) == Array(ramp(from: 1, count: 4).suffix(4)))
+        ring.write(at: -10, ramp(from: 1, count: 4))
+        #expect(ring.head == 2)
+    }
+
     @Test("a read reaching before the kept range returns zeros for the discarded part")
     func readsBeforeRangeAsZeros() {
         let ring = HistoryRing(capacity: 8)

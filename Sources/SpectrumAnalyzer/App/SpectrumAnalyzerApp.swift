@@ -30,8 +30,40 @@ final class AppModel: ObservableObject {
     @Published var ticks: Set<Int> = []
     @Published var inputFailure: OSStatus?
     @Published var adviceState: AdviceState = .idle
-    @Published var adviceModel = "sonnet"
+    @Published var adviceProgress = ""
+    @Published var adviceLiveUsage: AdviceUsage?
+    @Published var adviceModel = UserDefaults.standard.string(forKey: "advice.model") ?? "sonnet" {
+        didSet { UserDefaults.standard.set(adviceModel, forKey: "advice.model") }
+    }
+    @Published var adviceProfile = UserDefaults.standard.string(forKey: "advice.profile") ?? "claude-private" {
+        didSet { UserDefaults.standard.set(adviceProfile, forKey: "advice.profile") }
+    }
+    @Published var adviceLanguage = UserDefaults.standard.string(forKey: "advice.language").flatMap(AdviceLanguage.init(rawValue:)) ?? .russian {
+        didSet { UserDefaults.standard.set(adviceLanguage.rawValue, forKey: "advice.language") }
+    }
+    @Published var adviceGoal = UserDefaults.standard.string(forKey: "advice.goal").flatMap(AdviceGoal.init(rawValue:)) ?? .practice {
+        didSet { UserDefaults.standard.set(adviceGoal.rawValue, forKey: "advice.goal") }
+    }
+    /// From the cached rig until a fresh fetch replaces it.
+    @Published var rigPedals = FileRigCache().read().map { RigPedals.names(in: $0.text) } ?? []
+    @Published var isRefreshingRig = false
+    @Published var engagedPedals = Set(UserDefaults.standard.stringArray(forKey: "advice.engagedPedals") ?? []) {
+        didSet { UserDefaults.standard.set(engagedPedals.sorted(), forKey: "advice.engagedPedals") }
+    }
+    @Published var rigNotes = UserDefaults.standard.string(forKey: "advice.rigNotes") ?? "" {
+        didSet { UserDefaults.standard.set(rigNotes, forKey: "advice.rigNotes") }
+    }
+    @Published var advicePrompt = AdviceSettings.load(AdviceSettings.promptKey, default: AdviceSettings.defaultPrompt) {
+        didSet { AdviceSettings.store(advicePrompt, AdviceSettings.promptKey, default: AdviceSettings.defaultPrompt) }
+    }
+    @Published var adviceFetchDomains = AdviceSettings.load(AdviceSettings.fetchDomainsKey, default: AdviceSettings.defaultFetchDomains) {
+        didSet { AdviceSettings.store(adviceFetchDomains, AdviceSettings.fetchDomainsKey, default: AdviceSettings.defaultFetchDomains) }
+    }
     @Published var adviceAvailable = false
+    /// Survives a restart: the amp keeps its knob positions when the app quits.
+    @Published var previousRound = UserDefaults.standard.data(forKey: "advice.previousRound").flatMap { try? JSONDecoder().decode(AdviceRound.self, from: $0) } {
+        didSet { UserDefaults.standard.set(previousRound.flatMap { try? JSONEncoder().encode($0) }, forKey: "advice.previousRound") }
+    }
 
     private let audioDevices = AudioDevices()
     /// Shared by `MixTap` and `InterfaceInput` so their HAL setup/teardown
@@ -55,7 +87,7 @@ final class AppModel: ObservableObject {
     private static let cliPathKey = "advice.cliPath"
     private static let rigURLKey = "advice.rigURL"
     private let adviceRunner = AdviceRunner()
-    private let cliPath = UserDefaults.standard.string(forKey: AppModel.cliPathKey) ?? "~/bin/claude-private"
+    private var cliPath: String { UserDefaults.standard.string(forKey: AppModel.cliPathKey) ?? "~/bin/\(adviceProfile)" }
     private let rigURL = UserDefaults.standard.string(forKey: AppModel.rigURLKey).flatMap(URL.init(string:)) ?? RigSource.defaultURL
     private var adviceTask: Task<Void, Never>?
 
@@ -105,6 +137,8 @@ final class AppModel: ObservableObject {
         // keep running while a menu is open or the window is being resized.
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
+
+        refreshRig()
     }
 
     func pause() { session.pause() }
@@ -123,28 +157,61 @@ final class AppModel: ObservableObject {
     func requestAdvice() {
         guard adviceAvailable, adviceState != .running else { return }
         let model = adviceModel
+        let instruction = [advicePrompt, adviceGoal.instruction, adviceLanguage.instruction].compactMap { $0 }.joined(separator: "\n\n")
+        let fetchDomains = AdviceSettings.domains(from: adviceFetchDomains)
+        let previous = previousRound
         adviceState = .running
+        adviceProgress = "Analyzing history\u{2026}"
+        adviceLiveUsage = nil
 
         adviceTask = Task { [adviceRunner, cliPath, rigURL, mixRing, guitarRing] in
             let mix = Payload.analyze(ring: mixRing)
             let guitarBands = Payload.analyze(ring: guitarRing)
             let guitar = guitarBands.analyzedSeconds > 0 ? guitarBands : nil
 
+            self.adviceProgress = "Loading rig\u{2026}"
             let rigResult = await RigSource.fetch(url: rigURL)
             let outcome: AdviceOutcome
             switch rigResult {
             case .failure(.unavailable(let reason)):
                 outcome = .failure(reason)
             case .success(let rig):
-                let payload = Payload.render(mix: mix, guitar: guitar, rig: rig)
-                outcome = await adviceRunner.run(cliPath: cliPath, model: model, payload: payload)
+                self.rigPedals = RigPedals.names(in: rig.markdown)
+                let rigState = RigPedals.state(pedals: self.rigPedals, engaged: self.engagedPedals, notes: self.rigNotes)
+                let payload = Payload.render(mix: mix, guitar: guitar, rig: rig, instruction: instruction, rigState: rigState, previous: previous)
+                self.adviceProgress = "Waiting for \(model.capitalized)\u{2026}"
+                outcome = await adviceRunner.run(cliPath: cliPath, model: model, payload: payload, fetchDomains: fetchDomains) { progress in
+                    Task { @MainActor in
+                        guard self.adviceState == .running else { return }
+                        if let status = progress.status { self.adviceProgress = status }
+                        self.adviceLiveUsage = progress.usage
+                    }
+                }
             }
             guard !Task.isCancelled else { return }
             switch outcome {
-            case .success(let answer, let usage): self.adviceState = .answer(text: answer, usage: usage, model: model)
+            case .success(let answer, let usage):
+                self.adviceState = .answer(text: answer, usage: usage, model: model)
+                self.previousRound = AdviceRound(date: Date(), bands: Payload.bandTable(mix: mix, guitar: guitar), answer: answer)
             case .failure(let message): self.adviceState = .error(message)
             }
         }
+    }
+
+    func refreshRig() {
+        guard !isRefreshingRig else { return }
+        isRefreshingRig = true
+        Task { [rigURL] in
+            if case .success(let rig) = await RigSource.fetch(url: rigURL) {
+                self.rigPedals = RigPedals.names(in: rig.markdown)
+            }
+            self.isRefreshingRig = false
+        }
+    }
+
+    /// Forgets the previous round, for when the rig is back at its defaults.
+    func startOver() {
+        previousRound = nil
     }
 
     func cancelAdvice() {
@@ -185,7 +252,9 @@ final class AppModel: ObservableObject {
 
     private func syncSessionState() {
         state = session.state
-        scrubSeconds = session.scrubPosition / HistoryRing.sampleRate
+        // `scrubPosition` stays at the frame replay started from, so the
+        // thumb has to follow the analyzer head to move during playback.
+        scrubSeconds = session.currentHead / HistoryRing.sampleRate
         let upper = max(mixRing.head, HistoryRing.sampleRate) / HistoryRing.sampleRate
         let lower = mixRing.range.lowerBound / HistoryRing.sampleRate
         scrubRangeSeconds = lower...max(lower, upper)
@@ -221,22 +290,42 @@ struct ContentView: View {
                        ticks: model.ticks,
                        failure: model.inputFailure,
                        onSelect: model.selectInput)
-            SpectrumGraphView(mixPoints: model.mixPoints, guitarPoints: model.guitarPoints)
-            ControlsBar(state: model.state,
-                       scrubRangeSeconds: model.scrubRangeSeconds,
-                       scrubSeconds: $model.scrubSeconds,
-                       pinned: $model.pinned,
-                       timeConstant: $model.timeConstant,
-                       onPause: model.pause,
-                       onPlay: model.play,
-                       onResumeLive: model.resumeLive,
-                       onScrub: model.scrub,
-                       onReset: model.reset)
-            AdvicePanel(state: model.adviceState,
-                       isAvailable: model.adviceAvailable,
-                       model: $model.adviceModel,
-                       onRequest: model.requestAdvice,
-                       onCancel: model.cancelAdvice)
+            VSplitView {
+                VStack(spacing: 0) {
+                    SpectrumGraphView(mixPoints: model.mixPoints, guitarPoints: model.guitarPoints)
+                    ControlsBar(state: model.state,
+                               scrubRangeSeconds: model.scrubRangeSeconds,
+                               scrubSeconds: $model.scrubSeconds,
+                               pinned: $model.pinned,
+                               timeConstant: $model.timeConstant,
+                               onPause: model.pause,
+                               onPlay: model.play,
+                               onResumeLive: model.resumeLive,
+                               onScrub: model.scrub,
+                               onReset: model.reset)
+                }
+                .frame(minHeight: 220, idealHeight: 420)
+                AdvicePanel(state: model.adviceState,
+                           isAvailable: model.adviceAvailable,
+                           progress: model.adviceProgress,
+                           liveUsage: model.adviceLiveUsage,
+                           model: $model.adviceModel,
+                           profile: $model.adviceProfile,
+                           language: $model.adviceLanguage,
+                           goal: $model.adviceGoal,
+                           prompt: $model.advicePrompt,
+                           fetchDomains: $model.adviceFetchDomains,
+                           pedals: model.rigPedals,
+                           engagedPedals: $model.engagedPedals,
+                           rigNotes: $model.rigNotes,
+                           isRefreshingRig: model.isRefreshingRig,
+                           onRefreshRig: model.refreshRig,
+                           previousRoundDate: model.previousRound?.date,
+                           onStartOver: model.startOver,
+                           onRequest: model.requestAdvice,
+                           onCancel: model.cancelAdvice)
+                    .frame(minHeight: 80, idealHeight: 360)
+            }
         }
         .frame(minWidth: 640, minHeight: 420)
     }

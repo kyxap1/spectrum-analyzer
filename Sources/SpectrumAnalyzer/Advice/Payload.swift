@@ -19,17 +19,6 @@ enum Payload {
     static let silenceFloorDBFS: Float = -70
     static let floorDB: Float = -100
 
-    private static let instruction = """
-    You are a guitar-tone assistant. Below are third-octave band levels (dB) \
-    averaged over the analyzed window: the mix (everything the Mac played), \
-    the guitar (the selected interface inputs), and their difference (guitar \
-    minus mix). A large negative difference means the guitar is missing where \
-    the mix is loud; a large positive difference means the guitar collides \
-    with or covers the mix. Using the rig described below, suggest concrete \
-    settings changes -- which device and control, and roughly how much -- so \
-    the guitar fills the mix's gaps without fighting it.
-    """
-
     /// Averages third-octave band power over `ring`'s whole kept history at
     /// the KTD14 hop, skipping hops whose RMS is below `silenceFloorDBFS`.
     static func analyze(ring: HistoryRing) -> SourceBands {
@@ -54,11 +43,37 @@ enum Payload {
         return SourceBands(power: sum, analyzedSeconds: Double(included) * hopSeconds)
     }
 
-    /// Renders the fixed instruction, the band table and the rig text.
-    /// `guitar` is omitted from the table when nothing was captured.
-    static func render(mix: SourceBands, guitar: SourceBands?, rig: RigText) -> String {
-        var lines = [instruction, ""]
-        lines.append("Mix analyzed: \(Int(mix.analyzedSeconds)) s")
+    /// Renders the instruction, the band table, the rig text, the current rig
+    /// state and the previous round, if any.
+    static func render(mix: SourceBands, guitar: SourceBands?, rig: RigText,
+                       instruction: String = AdviceSettings.defaultPrompt, rigState: String? = nil,
+                       previous: AdviceRound? = nil) -> String {
+        var lines = [instruction, "", bandTable(mix: mix, guitar: guitar), ""]
+        if let cachedAt = rig.cachedAt {
+            lines.append("Rig (cached copy from \(DateFormatter.rigCache.string(from: cachedAt))):")
+        } else {
+            lines.append("Rig:")
+        }
+        lines.append(rig.markdown)
+        if let rigState {
+            lines.append("")
+            lines.append(rigState)
+        }
+        if let previous {
+            lines.append("")
+            lines.append("Previous round (\(DateFormatter.round.string(from: previous.date))), measured before its recommendation was applied:")
+            lines.append(previous.bands)
+            lines.append("")
+            lines.append("Previous recommendation:")
+            lines.append(previous.answer)
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// The analyzed durations and band rows; `guitar` is omitted when nothing
+    /// was captured.
+    static func bandTable(mix: SourceBands, guitar: SourceBands?) -> String {
+        var lines = ["Mix analyzed: \(Int(mix.analyzedSeconds)) s"]
         if let guitar, guitar.analyzedSeconds > 0 {
             lines.append("Guitar analyzed: \(Int(guitar.analyzedSeconds)) s")
             lines.append("")
@@ -76,13 +91,6 @@ enum Payload {
                 lines.append("\(formatHz(i))\t\(format(dB(mix.power[i], floor: floorDB)))")
             }
         }
-        lines.append("")
-        if let cachedAt = rig.cachedAt {
-            lines.append("Rig (cached copy from \(DateFormatter.rigCache.string(from: cachedAt))):")
-        } else {
-            lines.append("Rig:")
-        }
-        lines.append(rig.markdown)
         return lines.joined(separator: "\n")
     }
 
@@ -109,10 +117,25 @@ enum Payload {
     }
 }
 
+/// The last successful request's band table and answer. Its answer ends with
+/// the settings snapshot the next request starts from, so one round is enough.
+struct AdviceRound: Codable, Equatable {
+    let date: Date
+    let bands: String
+    let answer: String
+}
+
 private extension DateFormatter {
     static let rigCache: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
+        return formatter
+    }()
+
+    static let round: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
         return formatter
     }()
 }

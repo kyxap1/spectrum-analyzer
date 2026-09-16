@@ -23,6 +23,12 @@ struct GraphScaleTests {
         #expect(GraphScale.y(forDB: SpectrumAnalyzer.displayFloorDB, height: 500) == 500)
     }
 
+    @Test("frequency grid labels use k above 1 kHz")
+    func frequencyLabels() {
+        #expect(GraphScale.frequencyGridLines.map(GraphScale.frequencyLabel)
+            == ["20", "50", "100", "200", "500", "1k", "2k", "5k", "10k", "20k"])
+    }
+
     @Test("scrubber labels seconds as m:ss")
     func mmss() {
         #expect(formatMMSS(seconds: 0) == "0:00")

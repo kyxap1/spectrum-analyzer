@@ -188,3 +188,64 @@ private final class StubRigCache: RigCaching {
     func read() -> (text: String, date: Date)? { stored }
     func write(_ text: String) {}
 }
+
+@Suite("RigPedals")
+struct RigPedalsTests {
+    private let rig = """
+    ## Pedalboard
+
+    | Jack | Run |
+    | ---- | --- |
+    | A    | Rocksmith adapter |
+
+    ### Pedals
+
+    | Pedal | Designation | Jacks |
+    | ----- | ----------- | ----- |
+    | TC Electronic Polytune 3 | tuner | IN, OUT |
+    | BOSS GE-7 | equalizer, 7 bands | INPUT, OUTPUT |
+    | Donner ABY Box | source switch | A, B |
+    | Mooer Cab X2 | IR cab sim, stereo | INPUT L |
+    | NUX NMP-2 | dual footswitch | jack A |
+
+    ## Cables
+    | Cable | Run |
+    | ----- | --- |
+    | Long  | Guitar |
+    """
+
+    @Test("only the Pedals table's tone pedals are listed, without tuner and switches")
+    func namesSkipTunerAndSwitches() {
+        #expect(RigPedals.names(in: rig) == ["BOSS GE-7", "Mooer Cab X2"])
+    }
+
+    @Test("the state lists engaged pedals in table order, notes, and lands after the rig")
+    func stateFollowsTheRig() throws {
+        let state = try #require(RigPedals.state(pedals: ["BOSS GE-7", "Mooer Cab X2"],
+                                                 engaged: ["Mooer Cab X2", "BOSS GE-7", "Gone Pedal"],
+                                                 notes: " Cab X2 LC 80 Hz \n"))
+        #expect(state.contains("Pedals engaged now: BOSS GE-7, Mooer Cab X2."))
+        #expect(state.hasSuffix("Player notes: Cab X2 LC 80 Hz"))
+        #expect(RigPedals.state(pedals: ["BOSS GE-7"], engaged: [], notes: "").map { $0.contains("All pedals") } == true)
+        #expect(RigPedals.state(pedals: [], engaged: [], notes: "  ") == nil)
+
+        let payload = Payload.render(mix: SourceBands(power: [Float](repeating: 0, count: 31), analyzedSeconds: 4),
+                                     guitar: nil, rig: RigText(markdown: "rig text", cachedAt: nil), rigState: state)
+        #expect(payload.hasSuffix("rig text\n\n" + state))
+    }
+
+    @Test("the previous round's bands and answer follow the rig state, and are absent without one")
+    func previousRoundFollowsRigState() {
+        let bands = SourceBands(power: [Float](repeating: 0.001, count: 31), analyzedSeconds: 4)
+        let rig = RigText(markdown: "rig text", cachedAt: nil)
+        let table = Payload.bandTable(mix: bands, guitar: bands)
+        let previous = AdviceRound(date: Date(timeIntervalSince1970: 1_700_000_000), bands: table,
+                                   answer: "**Current settings**\n- amp bass: 1 o'clock")
+
+        let payload = Payload.render(mix: bands, guitar: bands, rig: rig, rigState: "state", previous: previous)
+        #expect(payload.contains("rig text\n\nstate\n\nPrevious round ("))
+        #expect(payload.contains(table + "\n\nPrevious recommendation:\n" + previous.answer))
+        #expect(payload.hasSuffix(previous.answer))
+        #expect(!Payload.render(mix: bands, guitar: bands, rig: rig).contains("Previous round"))
+    }
+}

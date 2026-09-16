@@ -18,6 +18,11 @@ enum GraphScale {
         let t = (clamped - floor) / -floor
         return height * (1 - t)
     }
+
+    /// Axis label for a frequency grid line: "500", "1k", "20k".
+    static func frequencyLabel(_ hz: Double) -> String {
+        hz >= 1_000 ? "\(Int(hz / 1_000))k" : "\(Int(hz))"
+    }
 }
 
 /// One graph overlaying the mix and guitar curves on a log-frequency, dB axis
@@ -29,9 +34,9 @@ struct SpectrumGraphView: View {
     var body: some View {
         Canvas { context, size in
             drawGrid(context: context, size: size)
-            drawCurve(mixPoints, color: .cyan, context: context, size: size)
+            drawCurve(mixPoints, color: .orange, context: context, size: size)
             if let guitarPoints {
-                drawCurve(guitarPoints, color: .orange, context: context, size: size)
+                drawCurve(guitarPoints, color: .cyan, context: context, size: size)
             }
         }
         .overlay(alignment: .topTrailing) { legend }
@@ -40,9 +45,9 @@ struct SpectrumGraphView: View {
 
     private var legend: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Label("Mix", systemImage: "circle.fill").foregroundStyle(.cyan)
+            Label("Mix", systemImage: "circle.fill").foregroundStyle(.orange)
             if guitarPoints != nil {
-                Label("Guitar", systemImage: "circle.fill").foregroundStyle(.orange)
+                Label("Guitar", systemImage: "circle.fill").foregroundStyle(.cyan)
             }
         }
         .font(.caption)
@@ -62,6 +67,24 @@ struct SpectrumGraphView: View {
             grid.addLine(to: CGPoint(x: size.width, y: y))
         }
         context.stroke(grid, with: .color(.white.opacity(0.15)))
+
+        // Edge labels anchor inward so 20 Hz, 20k and 0 dB stay inside the canvas.
+        let style = Color.white.opacity(0.5)
+        let lines = GraphScale.frequencyGridLines
+        for (i, hz) in lines.enumerated() {
+            let (anchor, dx): (UnitPoint, Double) = i == 0 ? (.bottomLeading, 6)
+                : i == lines.count - 1 ? (.bottomTrailing, -6) : (.bottom, 0)
+            let x = GraphScale.x(forHz: hz, width: size.width) + dx
+            context.draw(Text(GraphScale.frequencyLabel(hz)).font(.caption2).foregroundStyle(style),
+                         at: CGPoint(x: x, y: size.height - 2),
+                         anchor: anchor)
+        }
+        for db in GraphScale.dbGridLines {
+            let y = GraphScale.y(forDB: db, height: size.height)
+            context.draw(Text("\(Int(db)) dB").font(.caption2).foregroundStyle(style),
+                         at: CGPoint(x: 6, y: y + 2),
+                         anchor: .topLeading)
+        }
     }
 
     private func drawCurve(_ points: [SpectrumPoint], color: Color, context: GraphicsContext, size: CGSize) {

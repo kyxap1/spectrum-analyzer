@@ -28,8 +28,8 @@ struct ControlsBar: View {
                     .disabled(state != .paused)
                 Button("Resume Live", action: onResumeLive)
                     .disabled(state == .live)
-                Spacer()
                 Button("Reset", action: onReset)
+                Spacer()
                 Toggle("Pin on Top", isOn: $pinned)
                 Picker("Smoothing", selection: $timeConstant) {
                     Text("1 s").tag(1.0)
@@ -37,10 +37,11 @@ struct ControlsBar: View {
                     Text("8 s").tag(8.0)
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 180)
+                .fixedSize()
+                .padding(.leading, 16)
             }
             HStack {
-                Text(formatMMSS(seconds: scrubRangeSeconds.lowerBound))
+                Text(formatMMSS(seconds: scrubSeconds))
                 Slider(value: Binding(get: { Double(scrubSeconds) },
                                       set: { onScrub(Int($0)) }),
                        in: Double(scrubRangeSeconds.lowerBound)...Double(scrubRangeSeconds.upperBound))

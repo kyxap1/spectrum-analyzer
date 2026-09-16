@@ -42,7 +42,8 @@ final class HistoryRing {
         if gapStart < frame {
             store(nil, at: gapStart, count: frame - gapStart)
         }
-        let start = max(frame, oldest)
+        // Chunks captured before a Reset map to negative frames; those never land.
+        let start = max(frame, oldest, 0)
         if start < frame + count {
             chunk.withUnsafeBufferPointer {
                 store($0.baseAddress! + (start - frame) * HistoryRing.channels,

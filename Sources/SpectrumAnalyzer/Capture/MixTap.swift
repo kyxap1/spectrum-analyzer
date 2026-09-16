@@ -129,7 +129,9 @@ final class MixTap: @unchecked Sendable {
             kAudioAggregateDeviceMainSubDeviceKey: outputUID,
             kAudioAggregateDeviceIsPrivateKey: true,
             kAudioAggregateDeviceIsStackedKey: false,
-            kAudioAggregateDeviceTapAutoStartKey: true,
+            // No tap auto-start: it holds AudioDeviceStart until some process
+            // plays audio, and until then every other IO start in this
+            // process (the guitar input) times out too.
             kAudioAggregateDeviceSubDeviceListKey: [[kAudioSubDeviceUIDKey: outputUID]],
             kAudioAggregateDeviceTapListKey: [[
                 kAudioSubTapUIDKey: tapUID,
@@ -144,8 +146,10 @@ final class MixTap: @unchecked Sendable {
         let queue = queue
         let scale = MixTap.ticksToSeconds
         status = AudioDeviceCreateIOProcIDWithBlock(&ioProc, aggregate, nil) { _, input, inputTime, _, _ in
-            let buffer = input.pointee.mBuffers
-            guard let data = buffer.mData, buffer.mDataByteSize > 0 else { return }
+            // The output device's own input streams (an interface's inputs) come
+            // first; the tap's stream is appended last.
+            guard let buffer = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: input)).last,
+                  let data = buffer.mData, buffer.mDataByteSize > 0 else { return }
             let ticks = inputTime.pointee.mHostTime
             let samples = UnsafeBufferPointer(start: data.assumingMemoryBound(to: Float.self),
                                               count: Int(buffer.mDataByteSize) / MemoryLayout<Float>.size)
