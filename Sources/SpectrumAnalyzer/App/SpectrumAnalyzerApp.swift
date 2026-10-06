@@ -73,6 +73,14 @@ final class AppModel: ObservableObject {
     }
     /// The outcome of the last Learn noise, shown next to its button.
     @Published var noiseMessage = ""
+    /// N for Set reference and the live comparison: 5, 10 or 20 active seconds.
+    @Published var windowSeconds = UserDefaults.standard.object(forKey: "levels.windowSeconds") as? Int ?? 10 {
+        didSet { UserDefaults.standard.set(windowSeconds, forKey: "levels.windowSeconds") }
+    }
+    @Published var reference: Reference?
+    @Published var comparison: Comparison?
+    /// The outcome of the last Set reference, shown next to its button.
+    @Published var referenceStatus = ""
     /// Survives a restart: the amp keeps its knob positions when the app quits.
     @Published var previousRound = UserDefaults.standard.data(forKey: "advice.previousRound").flatMap { try? JSONDecoder().decode(AdviceRound.self, from: $0) } {
         didSet { UserDefaults.standard.set(previousRound.flatMap { try? JSONEncoder().encode($0) }, forKey: "advice.previousRound") }
@@ -97,6 +105,9 @@ final class AppModel: ObservableObject {
     private var guitarAnalyzer: SpectrumAnalyzer
     private let mixLog = BandLog()
     private let guitarLog = BandLog()
+    /// The guitar log's sequence number when the reference was set or loaded;
+    /// only hops logged since then count toward the comparison.
+    private var referenceMark = 0
     private var timer: Timer?
 
     private static let cliPathKey = "advice.cliPath"
@@ -168,6 +179,35 @@ final class AppModel: ObservableObject {
         session.reset()
         mixLog.reset()
         guitarLog.reset()
+        referenceMark = guitarLog.nextSequence
+    }
+
+    private var windowHops: Int { Int(Double(windowSeconds) / Payload.hopSeconds) }
+
+    /// Stores the guitar's last N active seconds as the reference (KTD7).
+    func setReference() {
+        let guitar = guitarLog.window(threshold: guitarThresholdDBFS, limit: windowHops)
+        let mix = mixLog.window(threshold: mixThresholdDBFS, limit: windowHops)
+        guard let made = Reference.make(guitar: guitar, mix: mix, windowSeconds: windowSeconds) else {
+            referenceStatus = "No active guitar in the kept history. Reference not set."
+            return
+        }
+        reference = made
+        referenceMark = guitarLog.nextSequence
+        referenceStatus = String(format: "Reference set from %.1f of %d s", made.activeSeconds, windowSeconds)
+        refreshComparison()
+    }
+
+    func clearReference() {
+        reference = nil
+        comparison = nil
+        referenceStatus = ""
+    }
+
+    private func refreshComparison() {
+        guard let reference else { return }
+        let window = guitarLog.window(threshold: guitarThresholdDBFS, limit: windowHops, since: referenceMark)
+        comparison = Comparison.make(reference: reference, window: window, windowHops: windowHops)
     }
 
     enum LevelSource { case guitar, mix }
@@ -317,6 +357,7 @@ final class AppModel: ObservableObject {
             mixLog.advance(ring: mixRing, to: mixRing.head)
             guitarLog.advance(ring: guitarRing, to: guitarRing.head)
         }
+        refreshComparison()
 
         let head = session.currentHead
         mixPoints = mixAnalyzer.advance(ring: mixRing, to: head)

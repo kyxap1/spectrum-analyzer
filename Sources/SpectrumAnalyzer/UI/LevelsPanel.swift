@@ -1,18 +1,116 @@
 import SwiftUI
 
-/// Live RMS and peak for guitar and mix, between the graph and the controls
-/// (R5). The guitar meter reads unavailable while the interface is not captured.
+/// Live RMS and peak for guitar and mix (R5), the activity thresholds, and
+/// Set reference with its live comparison (R7, R8), between the graph and the
+/// controls. The guitar meter reads unavailable while the interface is not
+/// captured.
 struct LevelsPanel: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
-        HStack(alignment: .top, spacing: 24) {
-            MeterView(title: "Guitar", reading: model.guitarLevel)
-            MeterView(title: "Mix", reading: model.mixLevel)
-            Spacer()
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .top, spacing: 24) {
+                MeterView(title: "Guitar", reading: model.guitarLevel)
+                MeterView(title: "Mix", reading: model.mixLevel)
+                Spacer()
+            }
+            HStack {
+                thresholdField("Guitar threshold", value: $model.guitarThresholdDBFS, source: .guitar)
+                thresholdField("Mix threshold", value: $model.mixThresholdDBFS, source: .mix)
+                Text(model.noiseMessage).foregroundStyle(.secondary).lineLimit(1)
+                Spacer()
+            }
+            HStack {
+                Button("Set reference", action: model.setReference)
+                Button("Clear", action: model.clearReference).disabled(model.reference == nil)
+                Picker("Window", selection: $model.windowSeconds) {
+                    ForEach([5, 10, 20], id: \.self) { Text("\($0) s").tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+                Text(model.referenceStatus).foregroundStyle(.secondary).lineLimit(1)
+                Spacer()
+            }
+            if model.reference != nil {
+                ComparisonView(comparison: model.comparison, windowSeconds: model.windowSeconds)
+            }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
+    }
+
+    private func thresholdField(_ title: String, value: Binding<Float>, source: AppModel.LevelSource) -> some View {
+        HStack(spacing: 4) {
+            Text(title)
+            TextField("", value: value, format: .number.precision(.fractionLength(0)))
+                .frame(width: 48)
+                .multilineTextAlignment(.trailing)
+            Text("dBFS")
+            Button("Learn noise") { model.learnNoise(source) }
+                .help("Press while not playing: sets the threshold to the last 3 s of noise plus 10 dB")
+        }
+    }
+}
+
+/// The overall difference and the 10 octave-band differences, each as a
+/// signed number with a bar centred on 0 dB, marked partial until N active
+/// seconds have accumulated since the press.
+private struct ComparisonView: View {
+    let comparison: Comparison?
+    let windowSeconds: Int
+
+    /// Bars span +/-12 dB.
+    private static let spanDB: Float = 12
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Text("Overall").font(.headline)
+                Text(Self.signed(comparison?.levelDifferenceDB) + " dB").monospacedDigit()
+                if let comparison {
+                    Text(String(format: "%.1f / %d s", comparison.activeSeconds, windowSeconds))
+                        .foregroundStyle(.secondary).monospacedDigit()
+                    if comparison.partial { Text("partial").foregroundStyle(.orange) }
+                }
+            }
+            HStack(spacing: 6) {
+                ForEach(0..<OctaveBands.labels.count, id: \.self) { i in
+                    let difference = comparison?.octaveDifferencesDB?[i]
+                    VStack(spacing: 2) {
+                        Text(OctaveBands.labels[i]).font(.caption)
+                        Text(Self.signed(difference)).font(.caption).monospacedDigit()
+                        CenteredBar(value: difference.map { CGFloat(min(max($0 / Self.spanDB, -1), 1)) })
+                    }
+                    .frame(minWidth: 40)
+                }
+            }
+        }
+    }
+
+    private static func signed(_ value: Float?) -> String {
+        guard let value else { return "\u{2014}" }
+        return String(format: "%+.1f", value)
+    }
+}
+
+private struct CenteredBar: View {
+    /// -1...1, nil for no reading.
+    let value: CGFloat?
+
+    var body: some View {
+        GeometryReader { geometry in
+            let half = geometry.size.width / 2
+            ZStack(alignment: .leading) {
+                Rectangle().fill(.quaternary)
+                if let value {
+                    Rectangle().fill(.tint)
+                        .frame(width: abs(value) * half)
+                        .offset(x: value < 0 ? half + value * half : half)
+                }
+                Rectangle().fill(.secondary).frame(width: 1).offset(x: half)
+            }
+        }
+        .frame(height: 8)
     }
 }
 
