@@ -2,8 +2,8 @@ import Darwin
 @testable import SpectrumAnalyzer
 
 /// Writes a stereo sine (same on both channels) of `seconds` duration at
-/// `frequency` and `amplitudeDBFS` peak amplitude, starting at frame 0.
-func writeSine(_ ring: HistoryRing, frequency: Double, amplitudeDBFS: Double, seconds: Double) {
+/// `frequency` and `amplitudeDBFS` peak amplitude, starting at `startFrame`.
+func writeSine(_ ring: HistoryRing, frequency: Double, amplitudeDBFS: Double, seconds: Double, startFrame: Int = 0) {
     let rate = HistoryRing.sampleRate
     let count = Int(seconds * Double(rate))
     let amplitude = pow(10, amplitudeDBFS / 20)
@@ -14,5 +14,5 @@ func writeSine(_ ring: HistoryRing, frequency: Double, amplitudeDBFS: Double, se
         frames[n * 2] = quantized
         frames[n * 2 + 1] = quantized
     }
-    ring.write(at: 0, frames)
+    ring.write(at: startFrame, frames)
 }

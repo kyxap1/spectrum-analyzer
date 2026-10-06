@@ -79,8 +79,8 @@ struct PayloadTests {
         writeSine(mixRing, frequency: 200, amplitudeDBFS: -6, seconds: seconds)
         writeSine(guitarRing, frequency: 800, amplitudeDBFS: -6, seconds: seconds)
 
-        let mix = Payload.analyze(ring: mixRing)
-        let guitar = Payload.analyze(ring: guitarRing)
+        let mix = Payload.analyze(ring: mixRing, thresholdDBFS: -70)
+        let guitar = Payload.analyze(ring: guitarRing, thresholdDBFS: -70)
         #expect(abs(mix.analyzedSeconds - seconds) < 0.001)
         #expect(abs(guitar.analyzedSeconds - seconds) < 0.001)
 
@@ -103,8 +103,8 @@ struct PayloadTests {
         let ringToneOnly = HistoryRing(capacity: Int(toneSeconds * Double(rate)))
         writeSine(ringToneOnly, frequency: 300, amplitudeDBFS: -6, seconds: toneSeconds)
 
-        let withTail = Payload.analyze(ring: ringWithTail)
-        let toneOnly = Payload.analyze(ring: ringToneOnly)
+        let withTail = Payload.analyze(ring: ringWithTail, thresholdDBFS: -70)
+        let toneOnly = Payload.analyze(ring: ringToneOnly, thresholdDBFS: -70)
 
         #expect(abs(withTail.analyzedSeconds - 120) < 0.001)
         #expect(withTail.analyzedSeconds == toneOnly.analyzedSeconds)
@@ -117,8 +117,8 @@ struct PayloadTests {
         writeSine(mixRing, frequency: 200, amplitudeDBFS: -6, seconds: 4)
         let guitarRing = HistoryRing(capacity: 4 * rate) // nothing written: empty kept range
 
-        let mix = Payload.analyze(ring: mixRing)
-        let guitar = Payload.analyze(ring: guitarRing)
+        let mix = Payload.analyze(ring: mixRing, thresholdDBFS: -70)
+        let guitar = Payload.analyze(ring: guitarRing, thresholdDBFS: -70)
         #expect(guitar.analyzedSeconds == 0)
 
         let text = Payload.render(mix: mix, guitar: guitar, rig: RigText(markdown: "rig", cachedAt: nil))
@@ -297,5 +297,16 @@ struct StartingPositionsTests {
         #expect(AdviceSettings.load(key, default: "default") == "custom")
         AdviceSettings.store("default", key, default: "default")
         #expect(UserDefaults.standard.object(forKey: key) == nil)
+    }
+}
+
+@Suite("PayloadThreshold")
+struct PayloadThresholdTests {
+    @Test("a threshold above the tone's RMS analyzes nothing, one below analyzes the tone's duration")
+    func thresholdGatesAnalysis() {
+        let ring = HistoryRing(capacity: 6 * rate)
+        writeSine(ring, frequency: 500, amplitudeDBFS: -20, seconds: 4)
+        #expect(Payload.analyze(ring: ring, thresholdDBFS: -10).analyzedSeconds == 0)
+        #expect(abs(Payload.analyze(ring: ring, thresholdDBFS: -30).analyzedSeconds - 4) < 0.001)
     }
 }

@@ -14,14 +14,14 @@ enum Payload {
     /// One FFT every 0.5 s (KTD14) -- reuses `SpectrumAnalyzer`'s warm-up hop,
     /// which is the same coarse cadence.
     static let hopSeconds = SpectrumAnalyzer.warmHopSeconds
-    /// Frames quieter than this RMS floor are left out of the average, so
-    /// pauses and a disconnected interface do not drag it down.
-    static let silenceFloorDBFS: Float = -70
+    /// Threshold until the player learns one for a source.
+    static let defaultThresholdDBFS: Float = -60
     static let floorDB: Float = -100
 
     /// Averages third-octave band power over `ring`'s whole kept history at
-    /// the KTD14 hop, skipping hops whose RMS is below `silenceFloorDBFS`.
-    static func analyze(ring: HistoryRing) -> SourceBands {
+    /// the KTD14 hop, skipping hops whose RMS is below `thresholdDBFS`, so
+    /// pauses and a disconnected interface do not drag it down.
+    static func analyze(ring: HistoryRing, thresholdDBFS: Float) -> SourceBands {
         let hopFrames = max(1, Int(hopSeconds * Double(HistoryRing.sampleRate)))
         let range = ring.range
         var sum = [Float](repeating: 0, count: ThirdOctaveBands.centerFrequencies.count)
@@ -31,7 +31,7 @@ enum Payload {
         while frame <= range.upperBound {
             defer { frame += hopFrames }
             let interleaved = ring.read(from: frame - SpectrumAnalyzer.fftSize, count: SpectrumAnalyzer.fftSize)
-            guard rmsDBFS(interleaved: interleaved) >= silenceFloorDBFS else { continue }
+            guard rmsDBFS(interleaved: interleaved) >= thresholdDBFS else { continue }
             let (power, binHz) = fftPowerSpectrum(interleaved: interleaved, fftSize: SpectrumAnalyzer.fftSize)
             let bands = ThirdOctaveBands.aggregate(power: power, binHz: binHz)
             for i in 0..<sum.count { sum[i] += bands[i] }
@@ -99,9 +99,8 @@ enum Payload {
         return lines.joined(separator: "\n")
     }
 
-    /// RMS in dBFS of an already-read window, used only to decide whether the
-    /// hop is silent.
-    private static func rmsDBFS(interleaved: [Int16]) -> Float {
+    /// RMS in dBFS of an already-read interleaved window.
+    static func rmsDBFS(interleaved: [Int16]) -> Float {
         var sumSquares: Float = 0
         for sample in interleaved {
             let normalized = Float(sample) / 32768

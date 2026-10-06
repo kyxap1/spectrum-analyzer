@@ -63,6 +63,14 @@ final class AppModel: ObservableObject {
         didSet { AdviceSettings.store(adviceFetchDomains, AdviceSettings.fetchDomainsKey, default: AdviceSettings.defaultFetchDomains) }
     }
     @Published var adviceAvailable = false
+    @Published var guitarThresholdDBFS = AppModel.storedThreshold("levels.guitarThreshold") {
+        didSet { UserDefaults.standard.set(guitarThresholdDBFS, forKey: "levels.guitarThreshold") }
+    }
+    @Published var mixThresholdDBFS = AppModel.storedThreshold("levels.mixThreshold") {
+        didSet { UserDefaults.standard.set(mixThresholdDBFS, forKey: "levels.mixThreshold") }
+    }
+    /// The outcome of the last Learn noise, shown next to its button.
+    @Published var noiseMessage = ""
     /// Survives a restart: the amp keeps its knob positions when the app quits.
     @Published var previousRound = UserDefaults.standard.data(forKey: "advice.previousRound").flatMap { try? JSONDecoder().decode(AdviceRound.self, from: $0) } {
         didSet { UserDefaults.standard.set(previousRound.flatMap { try? JSONEncoder().encode($0) }, forKey: "advice.previousRound") }
@@ -85,6 +93,8 @@ final class AppModel: ObservableObject {
     private let guitarWorker: CaptureWorker
     private var mixAnalyzer: SpectrumAnalyzer
     private var guitarAnalyzer: SpectrumAnalyzer
+    private let mixLog = BandLog()
+    private let guitarLog = BandLog()
     private var timer: Timer?
 
     private static let cliPathKey = "advice.cliPath"
@@ -146,8 +156,36 @@ final class AppModel: ObservableObject {
 
     func pause() { session.pause() }
     func play() { session.play() }
-    func resumeLive() { session.resumeLive() }
-    func reset() { session.reset() }
+    func resumeLive() {
+        mixLog.markBreak()
+        guitarLog.markBreak()
+        session.resumeLive()
+    }
+
+    func reset() {
+        session.reset()
+        mixLog.reset()
+        guitarLog.reset()
+    }
+
+    enum LevelSource { case guitar, mix }
+
+    /// Sets the source's threshold to the noise measured over the last few
+    /// seconds, so it must be pressed while Live and not playing.
+    func learnNoise(_ source: LevelSource) {
+        let log = source == .guitar ? guitarLog : mixLog
+        switch log.learnNoise(isLive: session.isLive) {
+        case .learned(let threshold):
+            if source == .guitar { guitarThresholdDBFS = threshold } else { mixThresholdDBFS = threshold }
+            noiseMessage = String(format: "Threshold %.0f dBFS", threshold)
+        case .silent: noiseMessage = "Digital silence: threshold unchanged."
+        case .refused(let reason): noiseMessage = reason
+        }
+    }
+
+    private static func storedThreshold(_ key: String) -> Float {
+        UserDefaults.standard.object(forKey: key) as? Float ?? Payload.defaultThresholdDBFS
+    }
 
     func scrub(toSeconds seconds: Int) {
         session.scrub(to: seconds * HistoryRing.sampleRate)
@@ -168,9 +206,11 @@ final class AppModel: ObservableObject {
         adviceProgress = "Analyzing history\u{2026}"
         adviceLiveUsage = nil
 
+        let mixThreshold = mixThresholdDBFS
+        let guitarThreshold = guitarThresholdDBFS
         adviceTask = Task { [adviceRunner, cliPath, rigURL, mixRing, guitarRing] in
-            let mix = Payload.analyze(ring: mixRing)
-            let guitarBands = Payload.analyze(ring: guitarRing)
+            let mix = Payload.analyze(ring: mixRing, thresholdDBFS: mixThreshold)
+            let guitarBands = Payload.analyze(ring: guitarRing, thresholdDBFS: guitarThreshold)
             let guitar = guitarBands.analyzedSeconds > 0 ? guitarBands : nil
 
             self.adviceProgress = "Loading rig\u{2026}"
@@ -270,6 +310,11 @@ final class AppModel: ObservableObject {
         guitarWorker.drain()
         refreshDeviceList()
         syncSessionState()
+
+        if session.isLive {
+            mixLog.advance(ring: mixRing, to: mixRing.head)
+            guitarLog.advance(ring: guitarRing, to: guitarRing.head)
+        }
 
         let head = session.currentHead
         mixPoints = mixAnalyzer.advance(ring: mixRing, to: head)
