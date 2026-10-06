@@ -41,7 +41,7 @@ An optional button sends the averaged spectra of the whole kept history and the 
 ### Problem Frame
 
 The user plays guitar along to YouTube tracks.
-The guitar goes through pedals, where the EQ lives (a Boss GE-7 before the drives and the amp, and the low and high cut on a Mooer Cab X2 after the load box), into a Focusrite Scarlett 18i16 4th Gen in stereo. The user hears it through the interface's direct monitoring, so the Mac never plays the guitar.
+The guitar goes through pedals, where the EQ lives (a Source Audio EQ2 after the noise gate, before the drives and the amp, and a second EQ2 after the Mooer Cab X2, which follows the load box), into a Focusrite Scarlett 18i16 4th Gen in stereo. The user hears it through the interface's direct monitoring, so the Mac never plays the guitar.
 To make the guitar sit well in the mix, the user needs to see which frequency ranges the track leaves empty and where the guitar collides with it.
 They cannot operate an app while playing, so what happened during a take has to be inspectable afterwards.
 They refuse to open a DAW just to play, and they reject extra runtime dependencies.
