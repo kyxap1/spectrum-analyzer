@@ -14,6 +14,8 @@ struct Snapshot: Codable, Identifiable, Equatable {
 /// never wipes saved parts.
 final class SnapshotStore {
     private(set) var snapshots: [Snapshot] = []
+    /// Why the last write failed; nil when it succeeded.
+    private(set) var lastError: String?
     private let url: URL
 
     init(url: URL = SnapshotStore.defaultURL) {
@@ -62,9 +64,12 @@ final class SnapshotStore {
     }
 
     private func persist() {
-        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        if let data = try? Self.encoder.encode(snapshots) {
-            try? data.write(to: url, options: .atomic)
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Self.encoder.encode(snapshots).write(to: url, options: .atomic)
+            lastError = nil
+        } catch {
+            lastError = "Snapshots were not saved: \(error.localizedDescription)"
         }
     }
 

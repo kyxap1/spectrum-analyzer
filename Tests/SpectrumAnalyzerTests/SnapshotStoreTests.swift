@@ -58,6 +58,16 @@ struct SnapshotStoreTests {
         #expect(!FileManager.default.fileExists(atPath: url.path))
     }
 
+    @Test("a failed write is reported instead of swallowed")
+    func writeFailureIsReported() throws {
+        let blocker = FileManager.default.temporaryDirectory.appendingPathComponent("snapshot-blocker-\(UUID().uuidString)")
+        try "file".write(to: blocker, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: blocker) }
+        let store = SnapshotStore(url: blocker.appendingPathComponent("snapshots.json"))
+        store.save(makeReference(), name: "A")
+        #expect(store.lastError != nil)
+    }
+
     @Test("a missing file starts an empty store without error")
     func missingFile() {
         #expect(SnapshotStore(url: temporaryURL()).snapshots.isEmpty)

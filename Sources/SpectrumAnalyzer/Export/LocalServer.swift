@@ -78,6 +78,16 @@ final class LocalServer: Sendable {
         }
     }
 
+    /// Refuses a Host header naming anything but loopback, so a web page
+    /// reaching the port through DNS rebinding gets nothing. A request with
+    /// no Host header (HTTP/1.0) passes.
+    static func hostAllowed(headerLines: [String]) -> Bool {
+        guard let line = headerLines.first(where: { $0.lowercased().hasPrefix("host:") }) else { return true }
+        let value = line.dropFirst("host:".count).trimmingCharacters(in: .whitespaces).lowercased()
+        let host = value.hasPrefix("[") ? String(value.prefix(while: { $0 != "]" }).dropFirst()) : String(value.split(separator: ":").first ?? "")
+        return ["127.0.0.1", "localhost", "::1"].contains(host)
+    }
+
     /// The full HTTP response for a request line such as `GET /levels HTTP/1.1`.
     static func respond(requestLine: String, body: Data) -> Data {
         let parts = requestLine.split(separator: " ")
@@ -113,15 +123,18 @@ final class LocalServer: Sendable {
         receive(on: connection, buffer: Data())
     }
 
-    /// Reads until the request line is complete, then answers and closes.
+    /// Reads until the headers are complete, then answers and closes.
     private func receive(on connection: NWConnection, buffer: Data) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: Self.maxRequestBytes) { [weak self] data, _, isComplete, error in
             guard let self else { return }
             var buffer = buffer
             if let data { buffer.append(data) }
-            if let end = buffer.firstIndex(of: UInt8(ascii: "\n")) {
-                let line = String(decoding: buffer[..<end], as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-                let bytes = Self.respond(requestLine: line, body: self.body.withLock { $0 })
+            let text = String(decoding: buffer, as: UTF8.self)
+            if let end = text.range(of: "\r\n\r\n") ?? text.range(of: "\n\n") {
+                let lines = text[..<end.lowerBound].split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }
+                let bytes = Self.hostAllowed(headerLines: Array(lines.dropFirst()))
+                    ? Self.respond(requestLine: lines.first ?? "", body: self.body.withLock { $0 })
+                    : Self.response(status: "403 Forbidden", text: "forbidden")
                 connection.send(content: bytes, contentContext: .finalMessage, isComplete: true,
                                 completion: .contentProcessed { _ in connection.cancel() })
             } else if error != nil || isComplete || buffer.count >= Self.maxRequestBytes {

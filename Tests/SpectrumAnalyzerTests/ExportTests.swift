@@ -141,7 +141,7 @@ struct LocalServerTests {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
         }
         #expect(connected == 0)
-        let request = "GET /levels HTTP/1.1\n"
+        let request = "GET /levels HTTP/1.1\n\n"
         _ = request.withCString { send(fd, $0, strlen($0), 0) }
         var buffer = [UInt8](repeating: 0, count: 64)
         let count = recv(fd, &buffer, buffer.count, 0)
@@ -155,6 +155,16 @@ struct LocalServerTests {
         server.stop()
         _ = await started
         server.stop()
+    }
+
+    @Test("only loopback Host headers are accepted")
+    func hostCheck() {
+        #expect(LocalServer.hostAllowed(headerLines: ["Host: 127.0.0.1:47800", "Accept: */*"]))
+        #expect(LocalServer.hostAllowed(headerLines: ["host: localhost"]))
+        #expect(LocalServer.hostAllowed(headerLines: ["Host: [::1]:47800"]))
+        #expect(LocalServer.hostAllowed(headerLines: ["Accept: */*"]))
+        #expect(!LocalServer.hostAllowed(headerLines: ["Host: evil.example:47800"]))
+        #expect(!LocalServer.hostAllowed(headerLines: ["Host: 127.0.0.1.evil.example"]))
     }
 
     @Test("routing: GET /levels is 200 JSON, other paths 404, other methods 405")

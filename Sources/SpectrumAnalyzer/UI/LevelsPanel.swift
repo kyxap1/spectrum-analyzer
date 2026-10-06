@@ -61,6 +61,9 @@ struct LevelsControls: View {
                 Text(model.referenceStatus).foregroundStyle(.secondary).lineLimit(1)
                 Spacer()
             }
+            if let error = model.snapshotError {
+                Text(error).foregroundStyle(.red)
+            }
             HStack {
                 Toggle("Local data export", isOn: $model.exportEnabled)
                     .help("Serves the levels as JSON on 127.0.0.1 for a local agent; off until you turn it on")

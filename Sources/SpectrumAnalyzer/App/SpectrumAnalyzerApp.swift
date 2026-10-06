@@ -101,6 +101,7 @@ final class AppModel: ObservableObject {
     }
     @Published var exportStatus = ""
     @Published var snapshots: [Snapshot] = []
+    @Published var snapshotError: String?
     @Published var comparison: Comparison?
     /// The outcome of the last Set reference, shown next to its button.
     @Published var referenceStatus = ""
@@ -136,6 +137,9 @@ final class AppModel: ObservableObject {
     /// Set by anything the export document shows besides the logs' growth.
     private var exportDirty = false
     private var exportSequence = 0
+    private var exportBuiltAt = Date.distantPast
+    /// Meter readings change every tick; the document follows them this often.
+    private static let exportRefreshInterval: TimeInterval = 0.25
     private var displayMemory = DisplayModeMemory(remembered: UserDefaults.standard.string(forKey: "display.screen"))
     /// The guitar log's sequence number when the reference was set or loaded;
     /// only hops logged since then count toward the comparison.
@@ -277,6 +281,7 @@ final class AppModel: ObservableObject {
     /// Rebuilds the bytes the listener serves (KTD11).
     private func refreshExport() {
         guard exportRunning else { return }
+        exportBuiltAt = Date()
         let guitar = interfaceInput.status == .running
             ? ExportSource(log: guitarLog, thresholdDBFS: guitarThresholdDBFS, reading: guitarLevel) : nil
         let mix = ExportSource(log: mixLog, thresholdDBFS: mixThresholdDBFS, reading: mixLevel)
@@ -305,17 +310,22 @@ final class AppModel: ObservableObject {
         guard let reference, !name.isEmpty else { return }
         snapshotStore.save(reference, name: name)
         self.reference?.name = name
-        snapshots = snapshotStore.snapshots
+        syncSnapshots()
     }
 
     func renameSnapshot(_ id: UUID, to name: String) {
         snapshotStore.rename(id, to: name)
-        snapshots = snapshotStore.snapshots
+        syncSnapshots()
     }
 
     func deleteSnapshot(_ id: UUID) {
         snapshotStore.delete(id)
+        syncSnapshots()
+    }
+
+    private func syncSnapshots() {
         snapshots = snapshotStore.snapshots
+        snapshotError = snapshotStore.lastError
     }
 
     /// Makes a snapshot the current reference and restarts the partial count.
@@ -496,7 +506,7 @@ final class AppModel: ObservableObject {
         guitarLevel = interfaceInput.status == .running ? LevelMeter.read(ring: guitarRing, head: head) : nil
         if case .unavailable(let status) = interfaceInput.status { inputFailure = status } else { inputFailure = nil }
         let sequence = mixLog.nextSequence + guitarLog.nextSequence
-        if exportDirty || sequence != exportSequence {
+        if exportDirty || sequence != exportSequence || Date().timeIntervalSince(exportBuiltAt) >= Self.exportRefreshInterval {
             exportDirty = false
             exportSequence = sequence
             refreshExport()

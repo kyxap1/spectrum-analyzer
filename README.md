@@ -26,8 +26,8 @@ brew upgrade --cask spectrum-analyzer
 ## Local data export
 
 Off by default. Turn on **Local data export** in the levels panel and the app
-serves read-only JSON on the loopback interface, reachable only from the same
-Mac:
+serves JSON (read-only for now) on the loopback interface, reachable only
+from the same Mac:
 
 ```
 curl http://127.0.0.1:47800/levels
