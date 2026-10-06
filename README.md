@@ -8,7 +8,7 @@ replay a moment with both curves following the audio.
 ## Install
 
 ```
-brew tap kyxap1/spectrum-analyzer https://github.com/kyxap1/spectrum-analyzer
+brew tap kyxap1/spectrum-analyzer
 brew install --cask spectrum-analyzer
 ```
 

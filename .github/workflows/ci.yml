@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+
+# A superseded PR run is safe to cancel; a release on master is not.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run tests
+        run: swift test
+
+      - name: Bundle app
+        run: scripts/bundle.sh 0.0.0
+
+  # Releases never commit to this repo, so the push trigger can't loop:
+  # the version comes from the run number and the cask lives in the tap.
+  release:
+    needs: test
+    if: github.event_name == 'push'
+    runs-on: macos-26
+    # TAP_DEPLOY_KEY is scoped to this environment, which only master can use.
+    environment: release
+    permissions:
+      contents: write
+    env:
+      VERSION: 0.1.${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: kyxap1/homebrew-spectrum-analyzer
+          ssh-key: ${{ secrets.TAP_DEPLOY_KEY }}
+          path: tap
+
+      - name: Bundle app
+        run: scripts/bundle.sh "$VERSION"
+
+      - name: Publish release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          zip="SpectrumAnalyzer-$VERSION.zip"
+          ditto -c -k --sequesterRsrc --keepParent "Spectrum Analyzer.app" "$zip"
+          gh release create "v$VERSION" "$zip" \
+            --target "$GITHUB_SHA" \
+            --title "v$VERSION" \
+            --notes "Spectrum Analyzer $VERSION"
+          echo "SHA256=$(shasum -a 256 "$zip" | cut -d ' ' -f1)" >> "$GITHUB_ENV"
+
+      - name: Bump cask in tap
+        run: |
+          scripts/bump-cask.sh tap/Casks/spectrum-analyzer.rb "$VERSION" "$SHA256"
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -am "Bump spectrum-analyzer to v$VERSION"
+          git push origin HEAD
