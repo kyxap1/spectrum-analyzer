@@ -131,6 +131,8 @@ final class AppModel: ObservableObject {
     private let snapshotStore = SnapshotStore()
     private let exportServer = LocalServer()
     private var exportRunning = false
+    /// Tells a start that was superseded by a stop or restart to stay silent.
+    private var exportGeneration = 0
     /// Set by anything the export document shows besides the logs' growth.
     private var exportDirty = false
     private var exportSequence = 0
@@ -244,20 +246,23 @@ final class AppModel: ObservableObject {
     private func startExport() {
         guard !exportRunning else { return }
         exportRunning = true
+        exportGeneration += 1
+        let generation = exportGeneration
         exportStatus = "Starting\u{2026}"
         let port = exportPort
         refreshExport()
         Task {
             do {
                 let bound = try await exportServer.start(port: port)
-                if exportEnabled { exportStatus = "http://127.0.0.1:\(bound)/levels" }
+                if generation == exportGeneration { exportStatus = "http://127.0.0.1:\(bound)/levels" }
             } catch {
-                exportFailed("Port \(port) unavailable: \(error.localizedDescription)")
+                if generation == exportGeneration { exportFailed("Port \(port) unavailable: \(error.localizedDescription)") }
             }
         }
     }
 
     private func stopExport() {
+        exportGeneration += 1
         exportRunning = false
         exportServer.stop()
         exportStatus = ""

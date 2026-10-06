@@ -124,6 +124,39 @@ struct LocalServerTests {
         #expect(address == IPv4Address("127.0.0.1")!)
     }
 
+    @Test("a request line ending in a bare LF is answered, and an idle client is dropped")
+    func bareLFAndIdle() async throws {
+        let server = LocalServer()
+        server.update(Data("{}".utf8))
+        let port = try await server.start(port: 0)
+        defer { server.stop() }
+
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        defer { close(fd) }
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = port.bigEndian
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        let connected = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+        }
+        #expect(connected == 0)
+        let request = "GET /levels HTTP/1.1\n"
+        _ = request.withCString { send(fd, $0, strlen($0), 0) }
+        var buffer = [UInt8](repeating: 0, count: 64)
+        let count = recv(fd, &buffer, buffer.count, 0)
+        #expect(String(decoding: buffer.prefix(max(count, 0)), as: UTF8.self).hasPrefix("HTTP/1.1 200"))
+    }
+
+    @Test("stopping a listener that has not become ready ends start() instead of hanging")
+    func stopDuringStart() async {
+        let server = LocalServer()
+        async let started: UInt16? = try? await server.start(port: 0)
+        server.stop()
+        _ = await started
+        server.stop()
+    }
+
     @Test("routing: GET /levels is 200 JSON, other paths 404, other methods 405")
     func routing() throws {
         let body = Data("{\"ok\":true}".utf8)

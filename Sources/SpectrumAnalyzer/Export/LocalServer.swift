@@ -9,6 +9,7 @@ import Synchronization
 final class LocalServer: Sendable {
     static let defaultPort: UInt16 = 47_800
     private static let maxRequestBytes = 8_192
+    private static let idleTimeout: DispatchTimeInterval = .seconds(5)
 
     private let body = Mutex<Data>(Data())
     private let listener = Mutex<NWListener?>(nil)
@@ -44,6 +45,8 @@ final class LocalServer: Sendable {
                     } else {
                         self?.onFailure.withLock { $0 }?(error.localizedDescription)
                     }
+                case .cancelled:
+                    result.withLock { $0?.resume(throwing: CancellationError()); $0 = nil }
                 default: break
                 }
             }
@@ -105,6 +108,8 @@ final class LocalServer: Sendable {
             return
         }
         connection.start(queue: queue)
+        // A client that connects and never finishes its request line is dropped.
+        queue.asyncAfter(deadline: .now() + Self.idleTimeout) { connection.cancel() }
         receive(on: connection, buffer: Data())
     }
 
@@ -114,8 +119,8 @@ final class LocalServer: Sendable {
             guard let self else { return }
             var buffer = buffer
             if let data { buffer.append(data) }
-            if let end = buffer.range(of: Data("\r\n".utf8)) {
-                let line = String(decoding: buffer[..<end.lowerBound], as: UTF8.self)
+            if let end = buffer.firstIndex(of: UInt8(ascii: "\n")) {
+                let line = String(decoding: buffer[..<end], as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
                 let bytes = Self.respond(requestLine: line, body: self.body.withLock { $0 })
                 connection.send(content: bytes, contentContext: .finalMessage, isComplete: true,
                                 completion: .contentProcessed { _ in connection.cancel() })

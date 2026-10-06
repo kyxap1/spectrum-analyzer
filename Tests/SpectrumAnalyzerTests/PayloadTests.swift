@@ -288,6 +288,12 @@ struct StartingPositionsTests {
         #expect(text.contains("state\n\nStarting positions:\n- **Amp** -- gain 3 o'clock.\n\nPrevious round ("))
     }
 
+    @Test("an emptied starting-positions field adds no section")
+    func emptyPositionsAreOmitted() {
+        let text = Payload.render(mix: bands, guitar: bands, rig: rig, startingPositions: " \n")
+        #expect(!text.contains("Starting positions:"))
+    }
+
     @Test("storing the default removes the key, a different value is stored and read back")
     func storeRoundTrip() {
         let key = "test.startingPositions.\(UUID().uuidString)"

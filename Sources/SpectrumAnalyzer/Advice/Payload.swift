@@ -59,7 +59,7 @@ enum Payload {
             lines.append("")
             lines.append(rigState)
         }
-        if let startingPositions {
+        if let startingPositions, !startingPositions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             lines.append("")
             lines.append("Starting positions:")
             lines.append(startingPositions)
