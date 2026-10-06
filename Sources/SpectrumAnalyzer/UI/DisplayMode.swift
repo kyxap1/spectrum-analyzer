@@ -54,6 +54,10 @@ struct DisplaySizes {
         isDisplayMode ? .monospacedDigitSystemFont(ofSize: 40, weight: .semibold)
             : .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
     }
+
+    /// `axis` and `legend` for text drawn by the graph's layers.
+    var axisNSFont: NSFont { isDisplayMode ? .systemFont(ofSize: 20) : .preferredFont(forTextStyle: .caption2) }
+    var legendNSFont: NSFont { isDisplayMode ? .systemFont(ofSize: 20) : .preferredFont(forTextStyle: .caption1) }
 }
 
 private struct DisplaySizesKey: EnvironmentKey {

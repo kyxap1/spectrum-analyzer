@@ -17,16 +17,22 @@ struct SpectrumAnalyzerApp: App {
 /// window renders, redrawing at 30 fps (KTD5).
 @MainActor
 final class AppModel: ObservableObject {
-    let curves = LiveCurves()
-    @Published var showDifference = UserDefaults.standard.bool(forKey: "graph.showDifference") {
-        didSet { UserDefaults.standard.set(showDifference, forKey: "graph.showDifference") }
+    let graph = LiveSink(GraphFrame())
+    @Published var showPeakHold = UserDefaults.standard.bool(forKey: "graph.showPeakHold") {
+        didSet {
+            UserDefaults.standard.set(showPeakHold, forKey: "graph.showPeakHold")
+            peakHold.reset()
+        }
+    }
+    /// Whole dB; sizes the reference corridor.
+    @Published var toneStep = UserDefaults.standard.object(forKey: "levels.toneStep") as? Int ?? 1 {
+        didSet { UserDefaults.standard.set(toneStep, forKey: "levels.toneStep") }
     }
     @Published var banners: [StatusBanner] = []
     @Published var pinned = false
     @Published var timeConstant = 3.0 { didSet { resetAnalyzers() } }
     @Published var state: SessionState = .live
-    @Published var scrubSeconds = 0
-    @Published var scrubRangeSeconds: ClosedRange<Int> = 0...0
+    let scrub = LiveSink(ScrubPosition())
     @Published var devices: [AudioInputDevice] = []
     @Published var selectedDeviceUID: String?
     @Published var ticks: Set<Int> = []
@@ -86,7 +92,12 @@ final class AppModel: ObservableObject {
             exportDirty = true
         }
     }
-    @Published var reference: Reference? { didSet { exportDirty = true } }
+    @Published var reference: Reference? {
+        didSet {
+            exportDirty = true
+            referencePoints = reference.map(GraphScale.points(of:))
+        }
+    }
     @Published var displayMode = false
     /// Off by default and remembered; turning it on starts the loopback listener.
     @Published var exportEnabled = UserDefaults.standard.bool(forKey: "export.enabled") {
@@ -125,6 +136,8 @@ final class AppModel: ObservableObject {
     private var guitarAnalyzer: SpectrumAnalyzer
     private let mixLog = BandLog()
     private let guitarLog = BandLog()
+    private var peakHold = PeakHold()
+    private var referencePoints: [SpectrumPoint]?
     private let snapshotStore = SnapshotStore()
     private let exportServer = LocalServer()
     private var exportRunning = false
@@ -216,15 +229,20 @@ final class AppModel: ObservableObject {
     }
 
     func pause() { session.pause() }
-    func play() { session.play() }
+    func play() {
+        peakHold.reset()
+        session.play()
+    }
     func resumeLive() {
         mixLog.markBreak()
         guitarLog.markBreak()
+        peakHold.reset()
         session.resumeLive()
     }
 
     func reset() {
         session.reset()
+        peakHold.reset()
         mixLog.reset()
         guitarLog.reset()
         live.clearPeaks()
@@ -377,6 +395,7 @@ final class AppModel: ObservableObject {
     }
 
     func scrub(toSeconds seconds: Int) {
+        peakHold.reset()
         session.scrub(to: seconds * HistoryRing.sampleRate)
     }
 
@@ -493,10 +512,11 @@ final class AppModel: ObservableObject {
         setIfChanged(\.state, session.state)
         // `scrubPosition` stays at the frame replay started from, so the
         // thumb has to follow the analyzer head to move during playback.
-        setIfChanged(\.scrubSeconds, session.currentHead / HistoryRing.sampleRate)
         let upper = max(mixRing.head, HistoryRing.sampleRate) / HistoryRing.sampleRate
         let lower = mixRing.range.lowerBound / HistoryRing.sampleRate
-        setIfChanged(\.scrubRangeSeconds, lower...max(lower, upper))
+        let position = ScrubPosition(seconds: session.currentHead / HistoryRing.sampleRate,
+                                     rangeSeconds: lower...max(lower, upper))
+        if position != scrub.value { scrub.send(position) }
         setIfChanged(\.adviceAvailable, AdviceAvailability.isAvailable(historyRange: mixRing.range))
     }
 
@@ -515,8 +535,12 @@ final class AppModel: ObservableObject {
         let head = session.currentHead
         let mixPoints = mixAnalyzer.advance(ring: mixRing, to: head)
         let guitarPoints = interfaceInput.status == .running ? guitarAnalyzer.advance(ring: guitarRing, to: head) : nil
-        curves.set(mix: mixPoints, guitar: guitarPoints,
-                   difference: showDifference ? guitarPoints.map { GraphScale.difference(guitar: $0, mix: mixPoints) } : nil)
+        if showPeakHold, let guitarPoints {
+            peakHold.update(with: guitarPoints, elapsedSeconds: SpectrumAnalyzer.liveHopSeconds)
+        }
+        graph.send(GraphFrame(guitar: guitarPoints, mix: mixPoints,
+                              peakHold: showPeakHold && guitarPoints != nil ? peakHold.points : nil,
+                              reference: referencePoints, toneStepDB: Float(toneStep)))
         if tickCount % Self.levelsEveryTicks == 0 {
             live.setMeters(guitar: interfaceInput.status == .running ? LevelMeter.read(ring: guitarRing, head: head) : nil,
                            mix: LevelMeter.read(ring: mixRing, head: head),
@@ -614,8 +638,7 @@ struct ContentView: View {
     }
 
     private var graph: some View {
-        SpectrumGraphView(curves: model.curves,
-                          referencePoints: model.reference.map(GraphScale.points(of:)))
+        SpectrumGraphView(sink: model.graph)
     }
 
     private var inputsPanel: some View {
@@ -628,10 +651,9 @@ struct ContentView: View {
 
     private var controlsBar: some View {
         ControlsBar(state: model.state,
-                    scrubRangeSeconds: model.scrubRangeSeconds,
-                    scrubSeconds: $model.scrubSeconds,
+                    scrub: model.scrub,
                     pinned: $model.pinned,
-                    showDifference: $model.showDifference,
+                    showPeakHold: $model.showPeakHold,
                     displayMode: Binding(get: { model.displayMode }, set: { model.setDisplayMode($0) }),
                     timeConstant: $model.timeConstant,
                     onPause: model.pause,

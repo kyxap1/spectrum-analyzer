@@ -70,18 +70,3 @@ final class LiveSink<Value> {
         targets.removeAll { !$0(value) }
     }
 }
-
-/// The three curves, which change 30 times a second. Only the graph observes
-/// them, so a frame redraws the canvas and not the whole window.
-@MainActor
-final class LiveCurves: ObservableObject {
-    @Published private(set) var mix: [SpectrumPoint] = []
-    @Published private(set) var guitar: [SpectrumPoint]?
-    @Published private(set) var difference: [SpectrumPoint]?
-
-    func set(mix: [SpectrumPoint], guitar: [SpectrumPoint]?, difference: [SpectrumPoint]?) {
-        self.mix = mix
-        self.guitar = guitar
-        if difference != self.difference { self.difference = difference }
-    }
-}
