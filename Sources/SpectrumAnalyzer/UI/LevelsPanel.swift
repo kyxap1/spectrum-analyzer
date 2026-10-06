@@ -6,6 +6,9 @@ import SwiftUI
 /// captured.
 struct LevelsPanel: View {
     @ObservedObject var model: AppModel
+    @State private var isNaming = false
+    @State private var isShowingSnapshots = false
+    @State private var draftName = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -23,6 +26,12 @@ struct LevelsPanel: View {
             HStack {
                 Button("Set reference", action: model.setReference)
                 Button("Clear", action: model.clearReference).disabled(model.reference == nil)
+                Button("Save as\u{2026}") {
+                    draftName = model.reference?.name ?? ""
+                    isNaming = true
+                }
+                .disabled(model.reference == nil)
+                Button("Snapshots\u{2026}") { isShowingSnapshots = true }
                 Picker("Window", selection: $model.windowSeconds) {
                     ForEach([5, 10, 20], id: \.self) { Text("\($0) s").tag($0) }
                 }
@@ -37,6 +46,12 @@ struct LevelsPanel: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
+        .alert("Save reference as", isPresented: $isNaming) {
+            TextField("Song \u{2014} part", text: $draftName)
+            Button("Save") { model.saveSnapshot(name: draftName.trimmingCharacters(in: .whitespaces)) }
+            Button("Cancel", role: .cancel) {}
+        }
+        .sheet(isPresented: $isShowingSnapshots) { SnapshotsSheet(model: model) }
     }
 
     private func thresholdField(_ title: String, value: Binding<Float>, source: AppModel.LevelSource) -> some View {
@@ -153,5 +168,59 @@ private struct MeterView: View {
     private static func fraction(_ dBFS: Float) -> CGFloat {
         guard dBFS.isFinite else { return 0 }
         return CGFloat(min(max((dBFS - floorDBFS) / -floorDBFS, 0), 1))
+    }
+}
+
+/// Lists saved snapshots with Load, Rename and Delete (R12, R13).
+private struct SnapshotsSheet: View {
+    @ObservedObject var model: AppModel
+    @State private var renaming: UUID?
+    @State private var draftName = ""
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Snapshots").font(.headline)
+            if model.snapshots.isEmpty {
+                Text("None saved. Set a reference, then Save as\u{2026}").foregroundStyle(.secondary)
+            }
+            List(model.snapshots) { snapshot in
+                HStack {
+                    if renaming == snapshot.id {
+                        TextField("Name", text: $draftName)
+                            .onSubmit { commitRename(snapshot.id) }
+                        Button("Done") { commitRename(snapshot.id) }
+                    } else {
+                        VStack(alignment: .leading) {
+                            Text(snapshot.name)
+                            Text(snapshot.date.formatted(date: .abbreviated, time: .shortened))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Load") {
+                            model.loadSnapshot(snapshot.id)
+                            dismiss()
+                        }
+                        Button("Rename") {
+                            draftName = snapshot.name
+                            renaming = snapshot.id
+                        }
+                        Button("Delete", role: .destructive) { model.deleteSnapshot(snapshot.id) }
+                    }
+                }
+            }
+            HStack {
+                Spacer()
+                Button("Close") { dismiss() }.keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding()
+        .frame(width: 480, height: 360)
+    }
+
+    private func commitRename(_ id: UUID) {
+        let name = draftName.trimmingCharacters(in: .whitespaces)
+        if !name.isEmpty { model.renameSnapshot(id, to: name) }
+        renaming = nil
     }
 }

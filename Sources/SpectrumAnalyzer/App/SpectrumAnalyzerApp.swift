@@ -82,6 +82,7 @@ final class AppModel: ObservableObject {
         didSet { UserDefaults.standard.set(windowSeconds, forKey: "levels.windowSeconds") }
     }
     @Published var reference: Reference?
+    @Published var snapshots: [Snapshot] = []
     @Published var comparison: Comparison?
     /// The outcome of the last Set reference, shown next to its button.
     @Published var referenceStatus = ""
@@ -109,6 +110,7 @@ final class AppModel: ObservableObject {
     private var guitarAnalyzer: SpectrumAnalyzer
     private let mixLog = BandLog()
     private let guitarLog = BandLog()
+    private let snapshotStore = SnapshotStore()
     /// The guitar log's sequence number when the reference was set or loaded;
     /// only hops logged since then count toward the comparison.
     private var referenceMark = 0
@@ -153,6 +155,7 @@ final class AppModel: ObservableObject {
         }
         session.onStateChange = { [weak self] in self?.syncSessionState() }
 
+        snapshots = snapshotStore.snapshots
         Permissions.requestMicrophoneAccessIfNeeded()
         mixTap.start()
         interfaceInput.start()
@@ -199,6 +202,33 @@ final class AppModel: ObservableObject {
         reference = made
         referenceMark = guitarLog.nextSequence
         referenceStatus = String(format: "Reference set from %.1f of %d s", made.activeSeconds, windowSeconds)
+        refreshComparison()
+    }
+
+    /// Saves the current reference under `name`; the reference takes the name too.
+    func saveSnapshot(name: String) {
+        guard let reference, !name.isEmpty else { return }
+        snapshotStore.save(reference, name: name)
+        self.reference?.name = name
+        snapshots = snapshotStore.snapshots
+    }
+
+    func renameSnapshot(_ id: UUID, to name: String) {
+        snapshotStore.rename(id, to: name)
+        snapshots = snapshotStore.snapshots
+    }
+
+    func deleteSnapshot(_ id: UUID) {
+        snapshotStore.delete(id)
+        snapshots = snapshotStore.snapshots
+    }
+
+    /// Makes a snapshot the current reference and restarts the partial count.
+    func loadSnapshot(_ id: UUID) {
+        guard let snapshot = snapshots.first(where: { $0.id == id }) else { return }
+        reference = snapshot.reference
+        referenceMark = guitarLog.nextSequence
+        referenceStatus = "Loaded \(snapshot.name)"
         refreshComparison()
     }
 
