@@ -26,19 +26,23 @@ struct Reference: Codable, Equatable {
     let windowSeconds: Int
     let activeSeconds: Double
     let guitarLevelDBFS: Float
+    /// The guitar's held peak when the reference was set, for matching unity by peak.
+    var guitarPeakDBFS: Float?
     let guitarBands: [Float]
     let guitarDisplay: [Float]
     let mixLevelDBFS: Float?
     let mixBands: [Float]?
 
     /// Nil when the guitar window holds no active hop.
-    static func make(guitar: ActiveWindow, mix: ActiveWindow, windowSeconds: Int, name: String? = nil) -> Reference? {
+    static func make(guitar: ActiveWindow, mix: ActiveWindow, windowSeconds: Int, name: String? = nil,
+                     guitarPeakDBFS: Float? = nil) -> Reference? {
         guard !guitar.hops.isEmpty else { return nil }
         let mixActive = !mix.hops.isEmpty
         return Reference(name: name,
                          windowSeconds: windowSeconds,
                          activeSeconds: guitar.activeSeconds,
                          guitarLevelDBFS: guitar.levelDBFS,
+                         guitarPeakDBFS: guitarPeakDBFS?.isFinite == true ? guitarPeakDBFS : nil,
                          guitarBands: guitar.bandPower,
                          guitarDisplay: guitar.displayPower,
                          mixLevelDBFS: mixActive ? mix.levelDBFS : nil,
@@ -54,14 +58,17 @@ struct Comparison: Equatable {
     let windowHops: Int
     let activeSeconds: Double
     let levelDifferenceDB: Float?
+    /// Held live peak minus the reference's peak; nil when either is unknown.
+    let peakDifferenceDB: Float?
     let octaveDifferencesDB: [Float]?
     let bandDifferencesDB: [Float]?
 
-    static func make(reference: Reference, window: ActiveWindow, windowHops: Int) -> Comparison {
+    static func make(reference: Reference, window: ActiveWindow, windowHops: Int, livePeakDBFS: Float? = nil) -> Comparison {
         let partial = window.hops.count < windowHops
+        let peakDifference = zip2(livePeakDBFS, reference.guitarPeakDBFS).map { $0 - $1 }
         guard !window.hops.isEmpty else {
             return Comparison(partial: partial, windowHops: windowHops, activeSeconds: 0, levelDifferenceDB: nil,
-                              octaveDifferencesDB: nil, bandDifferencesDB: nil)
+                              peakDifferenceDB: peakDifference, octaveDifferencesDB: nil, bandDifferencesDB: nil)
         }
         let floor = Payload.floorDB
         let liveOctaves = OctaveBands.power(fromBands: window.bandPower)
@@ -71,7 +78,13 @@ struct Comparison: Equatable {
             windowHops: windowHops,
             activeSeconds: window.activeSeconds,
             levelDifferenceDB: window.levelDBFS - reference.guitarLevelDBFS,
+            peakDifferenceDB: peakDifference,
             octaveDifferencesDB: zip(liveOctaves, referenceOctaves).map { dB($0, floor: floor) - dB($1, floor: floor) },
             bandDifferencesDB: zip(window.bandPower, reference.guitarBands).map { dB($0, floor: floor) - dB($1, floor: floor) })
     }
+}
+
+private func zip2(_ a: Float?, _ b: Float?) -> (Float, Float)? {
+    guard let a, let b, a.isFinite, b.isFinite else { return nil }
+    return (a, b)
 }

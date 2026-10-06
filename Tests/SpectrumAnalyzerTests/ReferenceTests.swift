@@ -97,6 +97,17 @@ struct ReferenceTests {
         #expect(OctaveBands.labels == ["31", "62", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"])
     }
 
+    @Test("the held live peak is compared with the reference's peak, and is nil when either is unknown")
+    func peakDifference() throws {
+        let flat = [Float](repeating: 1, count: bandCount)
+        let window = BandLog.average([hop(sequence: 0, bands: flat)])
+        let reference = try #require(Reference.make(guitar: window, mix: BandLog.average([]), windowSeconds: 10, guitarPeakDBFS: -6))
+        #expect(Comparison.make(reference: reference, window: window, windowHops: 20, livePeakDBFS: -3).peakDifferenceDB == 3)
+        #expect(Comparison.make(reference: reference, window: window, windowHops: 20).peakDifferenceDB == nil)
+        let noPeak = try #require(Reference.make(guitar: window, mix: BandLog.average([]), windowSeconds: 10, guitarPeakDBFS: -.infinity))
+        #expect(noPeak.guitarPeakDBFS == nil)
+    }
+
     @Test("Set reference with no active guitar hops returns no reference")
     func noActiveHops() {
         #expect(Reference.make(guitar: BandLog.average([]), mix: BandLog.average([]), windowSeconds: 10) == nil)

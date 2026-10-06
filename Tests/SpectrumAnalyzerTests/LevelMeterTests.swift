@@ -47,21 +47,23 @@ struct LevelMeterTests {
 
 @Suite("LevelReading")
 struct LevelReadingTests {
-    @Test("a rise shows at once and a fall is limited to a rate")
+    @Test("the peak is held while RMS falls at a limited rate")
     func releases() {
         let loud = LevelReading(rmsDBFS: -10, peakDBFS: -3)
         let quiet = LevelReading(rmsDBFS: -40, peakDBFS: -30)
-        #expect(loud.released(from: quiet, seconds: 0.1) == loud)
-        let fallen = quiet.released(from: loud, seconds: 0.5)
+        #expect(loud.shown(after: quiet, seconds: 0.1) == loud)
+        let fallen = quiet.shown(after: loud, seconds: 0.5)
         #expect(abs(fallen.rmsDBFS - -22) < 0.001)
-        #expect(abs(fallen.peakDBFS - -9) < 0.001)
+        #expect(fallen.peakDBFS == -3)
     }
 
     @Test("silence settles to minus infinity and the first reading is shown as is")
     func silenceAndFirst() {
         let silent = LevelReading(rmsDBFS: -.infinity, peakDBFS: -.infinity)
-        #expect(silent.released(from: nil, seconds: 0.1) == silent)
+        #expect(silent.shown(after: nil, seconds: 0.1) == silent)
         let nearFloor = LevelReading(rmsDBFS: -119, peakDBFS: -119)
-        #expect(silent.released(from: nearFloor, seconds: 1).rmsDBFS == -.infinity)
+        let settled = silent.shown(after: nearFloor, seconds: 1)
+        #expect(settled.rmsDBFS == -.infinity)
+        #expect(settled.peakDBFS == -119)
     }
 }

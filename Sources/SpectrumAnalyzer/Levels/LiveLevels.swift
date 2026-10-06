@@ -14,14 +14,21 @@ final class LiveLevels: ObservableObject {
     private(set) var rawGuitar: LevelReading?
     private(set) var rawMix: LevelReading?
 
-    /// Shown readings release slowly; `seconds` is the time since the last call.
+    /// Shown RMS releases slowly and the shown peak is held; `seconds` is the
+    /// time since the last call.
     func setMeters(guitar: LevelReading?, mix: LevelReading?, seconds: Double) {
         rawGuitar = guitar
         rawMix = mix
-        let shownGuitar = guitar.map { $0.released(from: self.guitar, seconds: seconds) }
-        let shownMix = mix.map { $0.released(from: self.mix, seconds: seconds) }
+        let shownGuitar = guitar.map { $0.shown(after: self.guitar, seconds: seconds) }
+        let shownMix = mix.map { $0.shown(after: self.mix, seconds: seconds) }
         if shownGuitar != self.guitar { self.guitar = shownGuitar }
         if shownMix != self.mix { self.mix = shownMix }
+    }
+
+    /// Restarts the held peaks from the current readings.
+    func clearPeaks() {
+        guitar = rawGuitar
+        mix = rawMix
     }
 
     func setComparison(_ comparison: Comparison?) {

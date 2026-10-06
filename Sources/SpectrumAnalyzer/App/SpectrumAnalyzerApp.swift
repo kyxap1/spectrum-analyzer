@@ -222,6 +222,7 @@ final class AppModel: ObservableObject {
         session.reset()
         mixLog.reset()
         guitarLog.reset()
+        live.clearPeaks()
         referenceMark = guitarLog.nextSequence
     }
 
@@ -294,11 +295,13 @@ final class AppModel: ObservableObject {
     func setReference() {
         let guitar = guitarLog.window(threshold: guitarThresholdDBFS, limit: windowHops)
         let mix = mixLog.window(threshold: mixThresholdDBFS, limit: windowHops)
-        guard let made = Reference.make(guitar: guitar, mix: mix, windowSeconds: windowSeconds) else {
+        guard let made = Reference.make(guitar: guitar, mix: mix, windowSeconds: windowSeconds,
+                                        guitarPeakDBFS: live.guitar?.peakDBFS) else {
             referenceStatus = "No active guitar in the kept history. Reference not set."
             return
         }
         reference = made
+        live.clearPeaks()
         referenceMark = guitarLog.nextSequence
         referenceStatus = String(format: "Reference set from %.1f of %d s", made.activeSeconds, windowSeconds)
         refreshComparison()
@@ -345,7 +348,8 @@ final class AppModel: ObservableObject {
     private func refreshComparison() {
         guard let reference else { return }
         let window = guitarLog.window(threshold: guitarThresholdDBFS, limit: windowHops, since: referenceMark)
-        live.setComparison(Comparison.make(reference: reference, window: window, windowHops: windowHops))
+        live.setComparison(Comparison.make(reference: reference, window: window, windowHops: windowHops,
+                                           livePeakDBFS: live.guitar?.peakDBFS))
     }
 
     enum LevelSource { case guitar, mix }

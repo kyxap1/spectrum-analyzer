@@ -4,12 +4,12 @@ struct LevelReading: Equatable {
     let rmsDBFS: Float
     let peakDBFS: Float
 
-    /// What the meter shows: a rise is immediate and a fall is limited to a
-    /// rate, so a sliding-window peak does not jump back and forth.
-    func released(from previous: LevelReading?, seconds: Double) -> LevelReading {
+    /// What the meter shows: RMS rises at once and falls at a limited rate;
+    /// the peak is held, never falling, until the player clears it.
+    func shown(after previous: LevelReading?, seconds: Double) -> LevelReading {
         guard let previous else { return self }
         return LevelReading(rmsDBFS: Self.fall(rmsDBFS, from: previous.rmsDBFS, rate: 24, seconds: seconds),
-                            peakDBFS: Self.fall(peakDBFS, from: previous.peakDBFS, rate: 12, seconds: seconds))
+                            peakDBFS: max(peakDBFS, previous.peakDBFS))
     }
 
     private static let floorDBFS: Float = -120

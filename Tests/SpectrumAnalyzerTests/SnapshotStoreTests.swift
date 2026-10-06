@@ -3,7 +3,7 @@ import Testing
 @testable import SpectrumAnalyzer
 
 private func makeReference(name: String? = nil) -> Reference {
-    Reference(name: name, windowSeconds: 10, activeSeconds: 10, guitarLevelDBFS: -18.5,
+    Reference(name: name, windowSeconds: 10, activeSeconds: 10, guitarLevelDBFS: -18.5, guitarPeakDBFS: -6,
               guitarBands: (0..<31).map { Float($0) / 100 }, guitarDisplay: [Float](repeating: 0.25, count: 240),
               mixLevelDBFS: -20, mixBands: [Float](repeating: 0.5, count: 31))
 }

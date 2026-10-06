@@ -32,7 +32,11 @@ private struct MetersRow: View {
             MeterView(title: "Guitar", reading: live.guitar)
             MeterView(title: "Mix", reading: live.mix)
             Spacer()
+            Button("Clear peaks") { live.clearPeaks() }
         }
+        .contentShape(Rectangle())
+        // A tap anywhere on the meters restarts the held peaks, for the tablet.
+        .onTapGesture { live.clearPeaks() }
     }
 }
 
@@ -184,6 +188,8 @@ private struct ComparisonView: View {
             HStack {
                 Text("Overall").font(sizes.label)
                 Text(Self.signed(comparison.levelDifferenceDB) + " dB").font(sizes.readout).monospacedDigit()
+                Text("Peak").font(sizes.label)
+                Text(Self.signed(comparison.peakDifferenceDB) + " dB").font(sizes.readout).monospacedDigit()
                 Text(String(format: "%.1f / %d s", comparison.activeSeconds, windowSeconds))
                     .font(sizes.label).foregroundStyle(.secondary).monospacedDigit()
                 if comparison.partial { Text("partial").font(sizes.label).foregroundStyle(.orange) }

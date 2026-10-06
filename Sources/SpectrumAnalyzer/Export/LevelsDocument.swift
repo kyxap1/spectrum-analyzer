@@ -83,6 +83,7 @@ struct LevelsDocument {
             "activeSeconds": reference.activeSeconds,
             "partial": comparison?.partial ?? true,
             "levelDBFS": round(reference.guitarLevelDBFS),
+            "peakDBFS": reference.guitarPeakDBFS.map(round) ?? NSNull(),
             "bandsDB": reference.guitarBands.map { round(dB($0, floor: Payload.floorDB)) },
             "octaveBandsDB": OctaveBands.power(fromBands: reference.guitarBands).map { round(dB($0, floor: Payload.floorDB)) },
             "differences": differences,
