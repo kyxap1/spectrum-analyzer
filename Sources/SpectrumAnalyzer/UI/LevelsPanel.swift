@@ -29,8 +29,8 @@ private struct MetersRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: sizes.isDisplayMode ? 48 : 24) {
-            MeterView(title: "Guitar", reading: live.guitar)
-            MeterView(title: "Mix", reading: live.mix)
+            MeterView(title: "Guitar", captured: live.hasGuitar, sink: live.guitarMeter)
+            MeterView(title: "Mix", captured: live.hasMix, sink: live.mixMeter)
             Spacer()
             Button("Clear peaks") { live.clearPeaks() }
         }
@@ -118,9 +118,12 @@ struct LevelsControls: View {
     }
 }
 
+/// The labels are SwiftUI; the numbers and the bar are AppKit views fed by the
+/// sink, so a meter refresh redraws them without a SwiftUI update (KTD7).
 private struct MeterView: View {
     let title: String
-    let reading: LevelReading?
+    let captured: Bool
+    let sink: LiveSink<LevelReading?>
     @Environment(\.displaySizes) private var sizes
 
     /// Bar spans -60 dBFS to 0 dBFS.
@@ -130,45 +133,110 @@ private struct MeterView: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 8) {
                 Text(title).font(sizes.label)
-                if let reading {
+                if captured {
                     Text("RMS").font(sizes.label)
-                    readout(reading.rmsDBFS)
+                    readout(\.rmsDBFS)
                     Text("Peak").font(sizes.label)
-                    readout(reading.peakDBFS)
+                    readout(\.peakDBFS)
                     Text("dBFS").font(sizes.label)
                 } else {
                     Text("not captured").font(sizes.readout).foregroundStyle(.secondary)
                 }
             }
-            bar(for: reading)
+            MeterBar(sink: sink)
+                .frame(width: sizes.isDisplayMode ? 420 : 200, height: sizes.isDisplayMode ? 14 : 8)
         }
     }
 
     /// A fixed-width box, so a changing number never shifts its neighbours.
-    private func readout(_ dBFS: Float) -> some View {
-        Text(LevelMeter.format(dBFS))
-            .font(sizes.readout)
-            .monospacedDigit()
-            .frame(width: sizes.isDisplayMode ? 130 : 52, alignment: .trailing)
+    private func readout(_ value: KeyPath<LevelReading, Float>) -> some View {
+        MeterReadout(sink: sink, value: value, font: sizes.readoutNSFont)
+            .frame(width: sizes.isDisplayMode ? 130 : 52)
     }
 
-    private func bar(for reading: LevelReading?) -> some View {
-        GeometryReader { geometry in
-            let fraction = reading.map { Self.fraction($0.rmsDBFS) } ?? 0
-            let peak = reading.map { Self.fraction($0.peakDBFS) } ?? 0
-            ZStack(alignment: .leading) {
-                Rectangle().fill(.quaternary)
-                Rectangle().fill(.tint).frame(width: geometry.size.width * fraction)
-                Rectangle().fill(.primary).frame(width: 2).offset(x: max(0, geometry.size.width * peak - 2))
-                    .opacity(reading == nil ? 0 : 1)
-            }
-        }
-        .frame(width: sizes.isDisplayMode ? 420 : 200, height: sizes.isDisplayMode ? 14 : 8)
-    }
-
-    private static func fraction(_ dBFS: Float) -> CGFloat {
+    static func fraction(_ dBFS: Float) -> CGFloat {
         guard dBFS.isFinite else { return 0 }
         return CGFloat(min(max((dBFS - floorDBFS) / -floorDBFS, 0), 1))
+    }
+}
+
+private struct MeterReadout: NSViewRepresentable {
+    let sink: LiveSink<LevelReading?>
+    let value: KeyPath<LevelReading, Float>
+    let font: NSFont
+
+    func makeNSView(context: Context) -> ReadoutView {
+        let view = ReadoutView()
+        view.font = font
+        sink.attach(view) { [value] view, reading in
+            view.text = reading.map { LevelMeter.format($0[keyPath: value]) } ?? ""
+        }
+        return view
+    }
+
+    func updateNSView(_ view: ReadoutView, context: Context) {
+        view.font = font
+    }
+
+    /// One line tall; without this SwiftUI stretches the view vertically.
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: ReadoutView, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? 0, height: nsView.intrinsicContentSize.height)
+    }
+}
+
+/// Right-aligned text, redrawn only when it changes.
+private final class ReadoutView: PassiveView {
+    var text = "" { didSet { if text != oldValue { needsDisplay = true } } }
+    var font = NSFont.systemFont(ofSize: NSFont.systemFontSize) {
+        didSet {
+            guard font != oldValue else { return }
+            invalidateIntrinsicContentSize()
+            needsDisplay = true
+        }
+    }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: NSView.noIntrinsicMetric, height: ceil(font.ascender - font.descender + font.leading))
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.labelColor]
+        let string = text as NSString
+        let size = string.size(withAttributes: attributes)
+        string.draw(at: NSPoint(x: bounds.width - size.width, y: (bounds.height - size.height) / 2), withAttributes: attributes)
+    }
+}
+
+private struct MeterBar: NSViewRepresentable {
+    let sink: LiveSink<LevelReading?>
+
+    func makeNSView(context: Context) -> MeterBarView {
+        let view = MeterBarView()
+        sink.attach(view) { view, reading in view.reading = reading }
+        return view
+    }
+
+    func updateNSView(_ view: MeterBarView, context: Context) {}
+}
+
+/// Display only: clicks pass through to the SwiftUI gestures around it.
+private class PassiveView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+/// RMS as a filled bar with the peak as a 2 pt line.
+private final class MeterBarView: PassiveView {
+    var reading: LevelReading? { didSet { if reading != oldValue { needsDisplay = true } } }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.quaternaryLabelColor.setFill()
+        bounds.fill(using: .sourceOver)
+        guard let reading else { return }
+        NSColor.controlAccentColor.setFill()
+        NSRect(x: 0, y: 0, width: bounds.width * MeterView.fraction(reading.rmsDBFS), height: bounds.height).fill(using: .sourceOver)
+        NSColor.labelColor.setFill()
+        NSRect(x: max(0, bounds.width * MeterView.fraction(reading.peakDBFS) - 2), y: 0, width: 2, height: bounds.height)
+            .fill(using: .sourceOver)
     }
 }
 

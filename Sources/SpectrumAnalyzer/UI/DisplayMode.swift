@@ -48,6 +48,12 @@ struct DisplaySizes {
     static let display = DisplaySizes(isDisplayMode: true, axis: .system(size: 20), legend: .system(size: 20),
                                       label: .system(size: 24, weight: .semibold),
                                       readout: .system(size: 40, weight: .semibold), touchHeight: 88)
+
+    /// `readout` for numbers drawn by AppKit views, with fixed-width digits.
+    var readoutNSFont: NSFont {
+        isDisplayMode ? .monospacedDigitSystemFont(ofSize: 40, weight: .semibold)
+            : .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+    }
 }
 
 private struct DisplaySizesKey: EnvironmentKey {

@@ -136,6 +136,11 @@ final class AppModel: ObservableObject {
     private var tickCount = 0
     /// Meters and the comparison refresh at 10 Hz; more is not readable.
     private static let levelsEveryTicks = 3
+    /// Each permission check is a synchronous round trip to tccd on the main
+    /// thread, so it runs once a second, not every frame.
+    private static let permissionsEveryTicks = 30
+    private var microphoneStatus = PermissionStatus.unknown
+    private var systemAudioStatus = PermissionStatus.unknown
     private var exportBuiltAt = Date.distantPast
     /// Meter readings change every tick; the document follows them this often.
     private static let exportRefreshInterval: TimeInterval = 0.25
@@ -525,8 +530,12 @@ final class AppModel: ObservableObject {
             exportSequence = sequence
             refreshExport()
         }
-        setIfChanged(\.banners, statusBanners(microphone: Permissions.microphoneStatus(),
-                                              systemAudioRecording: Permissions.systemAudioRecordingStatus(),
+        if tickCount % Self.permissionsEveryTicks == 1 {
+            microphoneStatus = Permissions.microphoneStatus()
+            systemAudioStatus = Permissions.systemAudioRecordingStatus()
+        }
+        setIfChanged(\.banners, statusBanners(microphone: microphoneStatus,
+                                              systemAudioRecording: systemAudioStatus,
                                               mix: mixTap.status))
     }
 }
