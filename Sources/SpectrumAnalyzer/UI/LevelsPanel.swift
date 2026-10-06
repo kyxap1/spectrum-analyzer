@@ -61,6 +61,15 @@ struct LevelsControls: View {
                 Text(model.referenceStatus).foregroundStyle(.secondary).lineLimit(1)
                 Spacer()
             }
+            HStack {
+                Toggle("Local data export", isOn: $model.exportEnabled)
+                    .help("Serves the levels as JSON on 127.0.0.1 for a local agent; off until you turn it on")
+                Text(model.exportStatus)
+                    .foregroundStyle(model.exportStatus.hasPrefix("http") ? Color.secondary : Color.red)
+                    .textSelection(.enabled)
+                    .lineLimit(1)
+                Spacer()
+            }
         }
         .alert("Save reference as", isPresented: $isNaming) {
             TextField("Song \u{2014} part", text: $draftName)

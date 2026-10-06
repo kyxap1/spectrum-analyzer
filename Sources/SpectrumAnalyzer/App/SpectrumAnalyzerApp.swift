@@ -70,19 +70,36 @@ final class AppModel: ObservableObject {
     }
     @Published var adviceAvailable = false
     @Published var guitarThresholdDBFS = AppModel.storedThreshold("levels.guitarThreshold") {
-        didSet { UserDefaults.standard.set(guitarThresholdDBFS, forKey: "levels.guitarThreshold") }
+        didSet {
+            UserDefaults.standard.set(guitarThresholdDBFS, forKey: "levels.guitarThreshold")
+            exportDirty = true
+        }
     }
     @Published var mixThresholdDBFS = AppModel.storedThreshold("levels.mixThreshold") {
-        didSet { UserDefaults.standard.set(mixThresholdDBFS, forKey: "levels.mixThreshold") }
+        didSet {
+            UserDefaults.standard.set(mixThresholdDBFS, forKey: "levels.mixThreshold")
+            exportDirty = true
+        }
     }
     /// The outcome of the last Learn noise, shown next to its button.
     @Published var noiseMessage = ""
     /// N for Set reference and the live comparison: 5, 10 or 20 active seconds.
     @Published var windowSeconds = UserDefaults.standard.object(forKey: "levels.windowSeconds") as? Int ?? 10 {
-        didSet { UserDefaults.standard.set(windowSeconds, forKey: "levels.windowSeconds") }
+        didSet {
+            UserDefaults.standard.set(windowSeconds, forKey: "levels.windowSeconds")
+            exportDirty = true
+        }
     }
-    @Published var reference: Reference?
+    @Published var reference: Reference? { didSet { exportDirty = true } }
     @Published var displayMode = false
+    /// Off by default and remembered; turning it on starts the loopback listener.
+    @Published var exportEnabled = UserDefaults.standard.bool(forKey: "export.enabled") {
+        didSet {
+            UserDefaults.standard.set(exportEnabled, forKey: "export.enabled")
+            if exportEnabled { startExport() } else { stopExport() }
+        }
+    }
+    @Published var exportStatus = ""
     @Published var snapshots: [Snapshot] = []
     @Published var comparison: Comparison?
     /// The outcome of the last Set reference, shown next to its button.
@@ -112,6 +129,11 @@ final class AppModel: ObservableObject {
     private let mixLog = BandLog()
     private let guitarLog = BandLog()
     private let snapshotStore = SnapshotStore()
+    private let exportServer = LocalServer()
+    private var exportRunning = false
+    /// Set by anything the export document shows besides the logs' growth.
+    private var exportDirty = false
+    private var exportSequence = 0
     private var displayMemory = DisplayModeMemory(remembered: UserDefaults.standard.string(forKey: "display.screen"))
     /// The guitar log's sequence number when the reference was set or loaded;
     /// only hops logged since then count toward the comparison.
@@ -155,7 +177,13 @@ final class AppModel: ObservableObject {
                 self?.refreshDevices()
             }
         }
-        session.onStateChange = { [weak self] in self?.syncSessionState() }
+        session.onStateChange = { [weak self] in
+            self?.exportDirty = true
+            self?.syncSessionState()
+        }
+        exportServer.onFailure.withLock { $0 = { [weak self] message in
+            Task { @MainActor in self?.exportFailed(message) }
+        } }
 
         snapshots = snapshotStore.snapshots
         Permissions.requestMicrophoneAccessIfNeeded()
@@ -174,6 +202,7 @@ final class AppModel: ObservableObject {
         self.timer = timer
 
         refreshRig()
+        if exportEnabled { startExport() }
     }
 
     func pause() { session.pause() }
@@ -205,6 +234,49 @@ final class AppModel: ObservableObject {
     private func syncDisplayMode() {
         displayMode = displayMemory.isOn
         UserDefaults.standard.set(displayMemory.remembered, forKey: "display.screen")
+    }
+
+    /// `export.port` is a hidden override, like `advice.rigURL`.
+    private var exportPort: UInt16 {
+        UInt16(exactly: UserDefaults.standard.integer(forKey: "export.port")).flatMap { $0 > 0 ? $0 : nil } ?? LocalServer.defaultPort
+    }
+
+    private func startExport() {
+        guard !exportRunning else { return }
+        exportRunning = true
+        exportStatus = "Starting\u{2026}"
+        let port = exportPort
+        refreshExport()
+        Task {
+            do {
+                let bound = try await exportServer.start(port: port)
+                if exportEnabled { exportStatus = "http://127.0.0.1:\(bound)/levels" }
+            } catch {
+                exportFailed("Port \(port) unavailable: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func stopExport() {
+        exportRunning = false
+        exportServer.stop()
+        exportStatus = ""
+    }
+
+    private func exportFailed(_ message: String) {
+        exportRunning = false
+        exportServer.stop()
+        exportStatus = message
+    }
+
+    /// Rebuilds the bytes the listener serves (KTD11).
+    private func refreshExport() {
+        guard exportRunning else { return }
+        let guitar = interfaceInput.status == .running
+            ? ExportSource(log: guitarLog, thresholdDBFS: guitarThresholdDBFS, reading: guitarLevel) : nil
+        let mix = ExportSource(log: mixLog, thresholdDBFS: mixThresholdDBFS, reading: mixLevel)
+        exportServer.update(LevelsDocument.make(state: state, windowSeconds: windowSeconds, guitar: guitar, mix: mix,
+                                                reference: reference, comparison: comparison, now: Date()).encoded())
     }
 
     private var windowHops: Int { Int(Double(windowSeconds) / Payload.hopSeconds) }
@@ -418,6 +490,12 @@ final class AppModel: ObservableObject {
         mixLevel = LevelMeter.read(ring: mixRing, head: head)
         guitarLevel = interfaceInput.status == .running ? LevelMeter.read(ring: guitarRing, head: head) : nil
         if case .unavailable(let status) = interfaceInput.status { inputFailure = status } else { inputFailure = nil }
+        let sequence = mixLog.nextSequence + guitarLog.nextSequence
+        if exportDirty || sequence != exportSequence {
+            exportDirty = false
+            exportSequence = sequence
+            refreshExport()
+        }
         banners = statusBanners(microphone: Permissions.microphoneStatus(),
                                 systemAudioRecording: Permissions.systemAudioRecordingStatus(),
                                 mix: mixTap.status)

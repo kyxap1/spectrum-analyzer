@@ -43,6 +43,8 @@ final class BandLog {
     /// Numbers the next appended hop; never goes back, not even on Reset.
     private(set) var nextSequence = 0
     private var lastFrame = 0
+    /// The frame of the newest hop boundary the log has reached.
+    var position: Int { lastFrame }
     private var contiguousHops = 0
 
     /// Appends the hops between the log's position and `head`'s hop boundary.
