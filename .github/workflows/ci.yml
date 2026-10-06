@@ -5,6 +5,12 @@ on:
   push:
     branches:
       - master
+    # Docs-only pushes ship nothing new, so they cut no release.
+    # Not `**.md`: Advice/prompt.md is bundled into the app.
+    paths-ignore:
+      - "docs/**"
+      - CLAUDE.md
+      - README.md
 
 # A superseded PR run is safe to cancel; a release on master is not.
 concurrency:
