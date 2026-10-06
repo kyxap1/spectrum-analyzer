@@ -56,6 +56,9 @@ final class AppModel: ObservableObject {
     @Published var advicePrompt = AdviceSettings.load(AdviceSettings.promptKey, default: AdviceSettings.defaultPrompt) {
         didSet { AdviceSettings.store(advicePrompt, AdviceSettings.promptKey, default: AdviceSettings.defaultPrompt) }
     }
+    @Published var startingPositions = AdviceSettings.load(AdviceSettings.startingPositionsKey, default: AdviceSettings.defaultStartingPositions) {
+        didSet { AdviceSettings.store(startingPositions, AdviceSettings.startingPositionsKey, default: AdviceSettings.defaultStartingPositions) }
+    }
     @Published var adviceFetchDomains = AdviceSettings.load(AdviceSettings.fetchDomainsKey, default: AdviceSettings.defaultFetchDomains) {
         didSet { AdviceSettings.store(adviceFetchDomains, AdviceSettings.fetchDomainsKey, default: AdviceSettings.defaultFetchDomains) }
     }
@@ -160,6 +163,7 @@ final class AppModel: ObservableObject {
         let instruction = [advicePrompt, adviceGoal.instruction, adviceLanguage.instruction].compactMap { $0 }.joined(separator: "\n\n")
         let fetchDomains = AdviceSettings.domains(from: adviceFetchDomains)
         let previous = previousRound
+        let positions = startingPositions
         adviceState = .running
         adviceProgress = "Analyzing history\u{2026}"
         adviceLiveUsage = nil
@@ -178,7 +182,7 @@ final class AppModel: ObservableObject {
             case .success(let rig):
                 self.rigPedals = RigPedals.names(in: rig.markdown)
                 let rigState = RigPedals.state(pedals: self.rigPedals, engaged: self.engagedPedals, notes: self.rigNotes)
-                let payload = Payload.render(mix: mix, guitar: guitar, rig: rig, instruction: instruction, rigState: rigState, previous: previous)
+                let payload = Payload.render(mix: mix, guitar: guitar, rig: rig, instruction: instruction, rigState: rigState, startingPositions: positions, previous: previous)
                 self.adviceProgress = "Waiting for \(model.capitalized)\u{2026}"
                 outcome = await adviceRunner.run(cliPath: cliPath, model: model, payload: payload, fetchDomains: fetchDomains) { progress in
                     Task { @MainActor in
@@ -314,6 +318,7 @@ struct ContentView: View {
                            language: $model.adviceLanguage,
                            goal: $model.adviceGoal,
                            prompt: $model.advicePrompt,
+                           startingPositions: $model.startingPositions,
                            fetchDomains: $model.adviceFetchDomains,
                            pedals: model.rigPedals,
                            engagedPedals: $model.engagedPedals,

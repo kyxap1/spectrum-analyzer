@@ -249,3 +249,53 @@ struct RigPedalsTests {
         #expect(!Payload.render(mix: bands, guitar: bands, rig: rig).contains("Previous round"))
     }
 }
+
+@Suite("StartingPositions")
+struct StartingPositionsTests {
+    private let rig = RigText(markdown: "rig text", cachedAt: nil)
+    private let bands = SourceBands(power: [Float](repeating: 0.001, count: 31), analyzedSeconds: 4)
+
+    @Test("covers AE6: shipped defaults name the current rig and none of the removed pedals")
+    func shippedDefaultsMatchRig() {
+        let text = Payload.render(mix: bands, guitar: bands, rig: rig,
+                                  instruction: AdviceSettings.defaultPrompt,
+                                  startingPositions: AdviceSettings.defaultStartingPositions)
+        for removed in ["GE-7", "Matcha", "Bad Horse"] { #expect(!text.contains(removed)) }
+        for present in ["EQ2", "Timmy", "Fortin"] { #expect(text.contains(present)) }
+    }
+
+    @Test("covers AE6: the shipped prompt asks for whole-dB EQ2 changes")
+    func promptAsksWholeDB() {
+        #expect(AdviceSettings.defaultPrompt.contains("EQ2"))
+        #expect(AdviceSettings.defaultPrompt.contains("whole dB"))
+        #expect(!AdviceSettings.defaultPrompt.contains("2.5 dB"))
+    }
+
+    @Test("the shipped prompt carries no positions list")
+    func promptHasNoPositions() {
+        let prompt = AdviceSettings.defaultPrompt
+        #expect(!prompt.contains("Default positions"))
+        for name in ["Wampler", "Timmy", "Fortin", "Terraform", "Collider", "Plethora", "Spark", "Ravager"] {
+            #expect(!prompt.contains(name))
+        }
+    }
+
+    @Test("edited starting positions land under their heading after the rig state and before the previous round")
+    func editedPositionsAreRendered() {
+        let previous = AdviceRound(date: Date(timeIntervalSince1970: 1_700_000_000), bands: "table", answer: "answer")
+        let text = Payload.render(mix: bands, guitar: bands, rig: rig, rigState: "state",
+                                  startingPositions: "- **Amp** -- gain 3 o'clock.", previous: previous)
+        #expect(text.contains("state\n\nStarting positions:\n- **Amp** -- gain 3 o'clock.\n\nPrevious round ("))
+    }
+
+    @Test("storing the default removes the key, a different value is stored and read back")
+    func storeRoundTrip() {
+        let key = "test.startingPositions.\(UUID().uuidString)"
+        defer { UserDefaults.standard.removeObject(forKey: key) }
+        AdviceSettings.store("custom", key, default: "default")
+        #expect(UserDefaults.standard.string(forKey: key) == "custom")
+        #expect(AdviceSettings.load(key, default: "default") == "custom")
+        AdviceSettings.store("default", key, default: "default")
+        #expect(UserDefaults.standard.object(forKey: key) == nil)
+    }
+}

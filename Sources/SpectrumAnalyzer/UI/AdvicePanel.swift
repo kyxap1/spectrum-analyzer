@@ -19,6 +19,7 @@ struct AdvicePanel: View {
     @Binding var language: AdviceLanguage
     @Binding var goal: AdviceGoal
     @Binding var prompt: String
+    @Binding var startingPositions: String
     @Binding var fetchDomains: String
     let pedals: [String]
     @Binding var engagedPedals: Set<String>
@@ -134,7 +135,7 @@ struct AdvicePanel: View {
         .padding(8)
         .frame(maxHeight: .infinity, alignment: .top)
         .sheet(isPresented: $isEditingSettings) {
-            AdviceSettingsSheet(prompt: $prompt, fetchDomains: $fetchDomains)
+            AdviceSettingsSheet(prompt: $prompt, startingPositions: $startingPositions, fetchDomains: $fetchDomains)
         }
     }
 
@@ -167,10 +168,12 @@ enum AdviceMarkdown {
     }
 }
 
-/// Edits the advice prompt and the domains the CLI may fetch from; each field
+/// Edits the advice prompt, the starting positions and the domains the CLI may
+/// fetch from; each field
 /// resets to the default shipped in the repo.
 private struct AdviceSettingsSheet: View {
     @Binding var prompt: String
+    @Binding var startingPositions: String
     @Binding var fetchDomains: String
     @Environment(\.dismiss) private var dismiss
 
@@ -184,7 +187,16 @@ private struct AdviceSettingsSheet: View {
             }
             TextEditor(text: $prompt)
                 .font(.body.monospaced())
-                .frame(minHeight: 200)
+                .frame(minHeight: 140)
+            HStack {
+                Text("Starting positions").font(.headline)
+                Spacer()
+                Button("Reset to Default") { startingPositions = AdviceSettings.defaultStartingPositions }
+                    .disabled(startingPositions == AdviceSettings.defaultStartingPositions)
+            }
+            TextEditor(text: $startingPositions)
+                .font(.body.monospaced())
+                .frame(minHeight: 140)
             HStack {
                 Text("Fetch domains").font(.headline)
                 Spacer()
@@ -203,6 +215,6 @@ private struct AdviceSettingsSheet: View {
             }
         }
         .padding()
-        .frame(width: 560, height: 480)
+        .frame(width: 560, height: 640)
     }
 }

@@ -44,10 +44,10 @@ enum Payload {
     }
 
     /// Renders the instruction, the band table, the rig text, the current rig
-    /// state and the previous round, if any.
+    /// state, the starting positions and the previous round, if any.
     static func render(mix: SourceBands, guitar: SourceBands?, rig: RigText,
                        instruction: String = AdviceSettings.defaultPrompt, rigState: String? = nil,
-                       previous: AdviceRound? = nil) -> String {
+                       startingPositions: String? = nil, previous: AdviceRound? = nil) -> String {
         var lines = [instruction, "", bandTable(mix: mix, guitar: guitar), ""]
         if let cachedAt = rig.cachedAt {
             lines.append("Rig (cached copy from \(DateFormatter.rigCache.string(from: cachedAt))):")
@@ -58,6 +58,11 @@ enum Payload {
         if let rigState {
             lines.append("")
             lines.append(rigState)
+        }
+        if let startingPositions {
+            lines.append("")
+            lines.append("Starting positions:")
+            lines.append(startingPositions)
         }
         if let previous {
             lines.append("")

@@ -27,14 +27,17 @@ enum AdviceGoal: String, CaseIterable {
     }
 }
 
-/// The advice prompt and the domains the CLI may fetch from. Defaults ship as
-/// `prompt.md` and `fetch-domains.txt`; an edit is stored in `UserDefaults`
+/// The advice prompt, the starting positions and the domains the CLI may fetch
+/// from. Defaults ship as `prompt.md`, `starting-positions.md` and
+/// `fetch-domains.txt`; an edit is stored in `UserDefaults`
 /// only while it differs from the default, so a changed default still applies.
 enum AdviceSettings {
     static let promptKey = "advice.prompt"
     static let fetchDomainsKey = "advice.fetchDomains"
+    static let startingPositionsKey = "advice.startingPositions"
 
     static let defaultPrompt = resource("prompt", "md")
+    static let defaultStartingPositions = resource("starting-positions", "md")
     static let defaultFetchDomains = resource("fetch-domains", "txt")
 
     /// Splits on whitespace and commas, dropping empties.
