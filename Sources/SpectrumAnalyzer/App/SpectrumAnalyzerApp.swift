@@ -24,9 +24,21 @@ final class AppModel: ObservableObject {
             peakHold.reset()
         }
     }
-    /// Whole dB; sizes the reference corridor.
+    /// Whole dB; sizes the reference corridor and the tone figures.
     @Published var toneStep = UserDefaults.standard.object(forKey: "levels.toneStep") as? Int ?? 1 {
-        didSet { UserDefaults.standard.set(toneStep, forKey: "levels.toneStep") }
+        didSet {
+            UserDefaults.standard.set(toneStep, forKey: "levels.toneStep")
+            verdictTracker.toneStepDB = Float(toneStep)
+            refreshComparison()
+        }
+    }
+    /// Whole dB; the unity figure's step.
+    @Published var unityStep = UserDefaults.standard.object(forKey: "levels.unityStep") as? Int ?? 2 {
+        didSet {
+            UserDefaults.standard.set(unityStep, forKey: "levels.unityStep")
+            verdictTracker.unityStepDB = Float(unityStep)
+            refreshComparison()
+        }
     }
     @Published var banners: [StatusBanner] = []
     @Published var pinned = false
@@ -96,6 +108,7 @@ final class AppModel: ObservableObject {
         didSet {
             exportDirty = true
             referencePoints = reference.map(GraphScale.points(of:))
+            verdictTracker.clear()
         }
     }
     @Published var displayMode = false
@@ -137,6 +150,7 @@ final class AppModel: ObservableObject {
     private let mixLog = BandLog()
     private let guitarLog = BandLog()
     private var peakHold = PeakHold()
+    private var verdictTracker = VerdictTracker()
     private var referencePoints: [SpectrumPoint]?
     private let snapshotStore = SnapshotStore()
     private let exportServer = LocalServer()
@@ -208,6 +222,8 @@ final class AppModel: ObservableObject {
             Task { @MainActor in self?.exportFailed(message) }
         } }
 
+        verdictTracker.unityStepDB = Float(unityStep)
+        verdictTracker.toneStepDB = Float(toneStep)
         snapshots = snapshotStore.snapshots
         Permissions.requestMicrophoneAccessIfNeeded()
         mixTap.start()
@@ -246,6 +262,7 @@ final class AppModel: ObservableObject {
         mixLog.reset()
         guitarLog.reset()
         referenceMark = guitarLog.nextSequence
+        verdictTracker.clear()
     }
 
     /// By hand; the screen the window is on is remembered (KTD10).
@@ -361,14 +378,17 @@ final class AppModel: ObservableObject {
 
     func clearReference() {
         reference = nil
-        live.setComparison(nil)
+        refreshComparison()
         referenceStatus = ""
     }
 
     private func refreshComparison() {
-        guard let reference else { return }
-        let window = guitarLog.window(threshold: guitarThresholdDBFS, limit: windowHops, since: referenceMark)
-        live.setComparison(Comparison.make(reference: reference, window: window, windowHops: windowHops))
+        let comparison = reference.map {
+            Comparison.make(reference: $0, window: guitarLog.window(threshold: guitarThresholdDBFS, limit: windowHops, since: referenceMark),
+                            windowHops: windowHops)
+        }
+        live.setComparison(comparison)
+        live.setVerdict(verdictTracker.update(comparison))
     }
 
     enum LevelSource { case guitar, mix }

@@ -14,6 +14,7 @@ final class LiveLevels: ObservableObject {
     @Published private(set) var hasMix = false
     /// Non-nil exactly while a reference is set.
     @Published private(set) var comparison: Comparison?
+    @Published private(set) var verdict: Verdict?
 
     var guitar: LevelReading? { guitarMeter.value }
     var mix: LevelReading? { mixMeter.value }
@@ -34,6 +35,10 @@ final class LiveLevels: ObservableObject {
 
     func setComparison(_ comparison: Comparison?) {
         if comparison != self.comparison { self.comparison = comparison }
+    }
+
+    func setVerdict(_ verdict: Verdict?) {
+        if verdict != self.verdict { self.verdict = verdict }
     }
 }
 

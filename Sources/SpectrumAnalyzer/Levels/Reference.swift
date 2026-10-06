@@ -65,6 +65,8 @@ struct Comparison: Equatable {
     let partial: Bool
     let windowHops: Int
     let activeSeconds: Double
+    /// The window's newest hop, so the verdict advances once per hop (KTD5).
+    let lastHopSequence: Int?
     /// Flat RMS level, for Details.
     let levelDifferenceDB: Float?
     /// K-weighted (KTD1); the unity figure.
@@ -85,7 +87,7 @@ struct Comparison: Equatable {
     static func make(reference: Reference, window: ActiveWindow, windowHops: Int) -> Comparison {
         let partial = window.hops.count < windowHops
         guard !window.hops.isEmpty else {
-            return Comparison(partial: partial, windowHops: windowHops, activeSeconds: 0, levelDifferenceDB: nil,
+            return Comparison(partial: partial, windowHops: windowHops, activeSeconds: 0, lastHopSequence: nil, levelDifferenceDB: nil,
                               loudnessDifferenceDB: nil, averagePeakDifferenceDB: nil, crestDifferenceDB: nil,
                               octaveCrestDifferencesDB: nil, octaveDifferencesDB: nil, bandDifferencesDB: nil,
                               hopLoudnessDifferencesDB: [], hopToneDifferencesDB: [], hopCrestDifferencesDB: [])
@@ -110,6 +112,7 @@ struct Comparison: Equatable {
             partial: partial,
             windowHops: windowHops,
             activeSeconds: window.activeSeconds,
+            lastHopSequence: window.hops.last?.sequence,
             levelDifferenceDB: window.levelDBFS - reference.guitarLevelDBFS,
             loudnessDifferenceDB: live.loudness,
             averagePeakDifferenceDB: averagePeak,
