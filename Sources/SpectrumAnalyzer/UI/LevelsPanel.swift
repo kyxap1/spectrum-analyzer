@@ -1,22 +1,32 @@
 import SwiftUI
 
-/// Live RMS and peak for guitar and mix (R5) and the live comparison against
-/// the reference (R8), between the graph and the controls. The controls
-/// (thresholds, Set reference, snapshots) follow in normal mode and move into
-/// the More sheet in display mode. The guitar meter reads unavailable while
-/// the interface is not captured.
+/// Live RMS and peak for guitar and mix (R5) and the comparison against the
+/// reference (R8). In normal mode they sit with the controls in a collapsed
+/// Details section (R15); display mode shows the meters and comparison and
+/// moves the controls into the More sheet. The guitar meter reads unavailable
+/// while the interface is not captured.
 struct LevelsPanel: View {
     /// Not observed: the fast-changing parts watch `LiveLevels` themselves.
     let model: AppModel
     @Environment(\.displaySizes) private var sizes
+    @State private var isExpanded = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            MetersRow(live: model.live)
-            if !sizes.isDisplayMode {
-                LevelsControls(model: model)
+        Group {
+            if sizes.isDisplayMode {
+                VStack(alignment: .leading, spacing: 4) {
+                    MetersRow(live: model.live)
+                    ComparisonSection(live: model.live)
+                }
+            } else {
+                DisclosureGroup("Details", isExpanded: $isExpanded) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ComparisonSection(live: model.live)
+                        MetersRow(live: model.live)
+                        LevelsControls(model: model)
+                    }
+                }
             }
-            ComparisonSection(live: model.live)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
@@ -47,13 +57,9 @@ private struct ComparisonSection: View {
     }
 }
 
-/// Thresholds with Learn noise, Set reference, the window length and the
-/// snapshots (R6, R7, R12, R13).
+/// Thresholds with Learn noise, the window length and the export (R6, R7).
 struct LevelsControls: View {
     @ObservedObject var model: AppModel
-    @State private var isNaming = false
-    @State private var isShowingSnapshots = false
-    @State private var draftName = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -64,26 +70,11 @@ struct LevelsControls: View {
                 Spacer()
             }
             HStack {
-                Button("Set reference", action: model.setReference)
-                Button("Clear", action: model.clearReference).disabled(model.reference == nil)
-                Button("Save as\u{2026}") {
-                    draftName = model.reference?.name ?? ""
-                    isNaming = true
-                }
-                .disabled(model.reference == nil)
-                Button("Snapshots\u{2026}") { isShowingSnapshots = true }
                 Picker("Window", selection: $model.windowSeconds) {
                     ForEach([5, 10, 20], id: \.self) { Text("\($0) s").tag($0) }
                 }
                 .pickerStyle(.segmented)
                 .fixedSize()
-                Text(model.referenceStatus).foregroundStyle(.secondary).lineLimit(1)
-                Spacer()
-            }
-            if let error = model.snapshotError {
-                Text(error).foregroundStyle(.red)
-            }
-            HStack {
                 Toggle("Local data export", isOn: $model.exportEnabled)
                     .help("Serves the levels as JSON on 127.0.0.1 for a local agent; off until you turn it on")
                 Text(model.exportStatus)
@@ -93,12 +84,6 @@ struct LevelsControls: View {
                 Spacer()
             }
         }
-        .alert("Save reference as", isPresented: $isNaming) {
-            TextField("Song \u{2014} part", text: $draftName)
-            Button("Save") { model.saveSnapshot(name: draftName.trimmingCharacters(in: .whitespaces)) }
-            Button("Cancel", role: .cancel) {}
-        }
-        .sheet(isPresented: $isShowingSnapshots) { SnapshotsSheet(model: model) }
     }
 
     private func thresholdField(_ title: String, value: Binding<Float>, source: AppModel.LevelSource) -> some View {
@@ -255,6 +240,10 @@ private struct ComparisonView: View {
                 Text(String(format: "%.1f / %d s", comparison.activeSeconds, windowSeconds))
                     .font(sizes.label).foregroundStyle(.secondary).monospacedDigit()
                 if comparison.partial { Text("partial").font(sizes.label).foregroundStyle(.orange) }
+                Text("Avg peak").font(sizes.label)
+                Text(Self.signed(comparison.averagePeakDifferenceDB) + " dB").font(sizes.readout).monospacedDigit()
+                Text("Crest").font(sizes.label)
+                Text(Self.signed(comparison.crestDifferenceDB) + " dB").font(sizes.readout).monospacedDigit()
             }
             HStack(spacing: 6) {
                 ForEach(0..<OctaveBands.labels.count, id: \.self) { i in
@@ -263,6 +252,8 @@ private struct ComparisonView: View {
                         Text(OctaveBands.labels[i]).font(sizes.isDisplayMode ? sizes.axis : .caption)
                         Text(Self.signed(difference)).font(sizes.isDisplayMode ? sizes.label : .caption).monospacedDigit()
                         CenteredBar(value: difference.map { CGFloat(min(max($0 / Self.spanDB, -1), 1)) })
+                        Text("crest " + Self.signed(comparison.octaveCrestDifferencesDB?[i]))
+                            .font(sizes.isDisplayMode ? sizes.axis : .caption2).foregroundStyle(.secondary).monospacedDigit()
                     }
                     .frame(minWidth: sizes.isDisplayMode ? 100 : 40)
                 }
@@ -298,7 +289,7 @@ private struct CenteredBar: View {
 }
 
 /// Lists saved snapshots with Load, Rename and Delete (R12, R13).
-private struct SnapshotsSheet: View {
+struct SnapshotsSheet: View {
     @ObservedObject var model: AppModel
     @State private var renaming: UUID?
     @State private var draftName = ""

@@ -388,7 +388,10 @@ final class AppModel: ObservableObject {
                             windowHops: windowHops)
         }
         live.setComparison(comparison)
-        live.setVerdict(verdictTracker.update(comparison))
+        live.setVerdict(verdictTracker.update(comparison), isPaused: state != .live)
+        let history = HistoryFrame(points: HistoryScale.points(log: guitarLog, thresholdDBFS: guitarThresholdDBFS),
+                                   referenceLoudnessDB: reference.map { Loudness.db(bands: $0.guitarBands) })
+        if history != live.history.value { live.history.send(history) }
     }
 
     enum LevelSource { case guitar, mix }
@@ -608,11 +611,13 @@ struct ContentView: View {
             inputsPanel
             VSplitView {
                 VStack(spacing: 0) {
-                    graph
+                    VerdictStrip(live: model.live, model: model)
+                    graph.frame(minHeight: 160)
+                    HistoryStrip(sink: model.live.history).frame(height: 40)
                     LevelsPanel(model: model)
                     controlsBar
                 }
-                .frame(minHeight: 220, idealHeight: 420)
+                .frame(minHeight: 360, idealHeight: 520)
                 advicePanel
                     .frame(minHeight: 80, idealHeight: 360)
             }
@@ -647,6 +652,7 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     inputsPanel
                     controlsBar
+                    ReferenceMenu(model: model).padding(.horizontal, 8)
                     LevelsControls(model: model).padding(.horizontal, 8)
                     advicePanel.frame(minHeight: 360)
                 }
