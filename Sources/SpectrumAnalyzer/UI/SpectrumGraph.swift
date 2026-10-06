@@ -48,48 +48,85 @@ enum GraphScale {
 /// against its own scale on the right edge; the reference curve shares the
 /// main dB scale so it compares directly with the live guitar.
 struct SpectrumGraphView: View {
-    let mixPoints: [SpectrumPoint]
-    let guitarPoints: [SpectrumPoint]?
-    var differencePoints: [SpectrumPoint]?
+    @ObservedObject var curves: LiveCurves
     var referencePoints: [SpectrumPoint]?
     @Environment(\.displaySizes) private var sizes
 
     var body: some View {
+        ZStack {
+            GraphGrid()
+            curveCanvas
+        }
+        .overlay(alignment: .topTrailing) { legend }
+        .background(Color.black.opacity(0.85))
+    }
+
+    private var curveCanvas: some View {
         Canvas { context, size in
-            drawGrid(context: context, size: size)
-            drawCurve(mixPoints, color: .orange, context: context, size: size)
+            drawCurve(curves.mix, color: .orange, context: context, size: size)
             if let referencePoints {
                 drawCurve(referencePoints, color: .cyan.opacity(0.45), dash: [6, 4], context: context, size: size)
             }
-            if let guitarPoints {
+            if let guitarPoints = curves.guitar {
                 drawCurve(guitarPoints, color: .cyan, context: context, size: size)
             }
-            if let differencePoints {
+            if let differencePoints = curves.difference {
                 drawCurve(differencePoints, color: .green, dash: [2, 3], context: context, size: size) {
                     GraphScale.y(forDifferenceDB: $0, height: size.height)
                 }
                 drawDifferenceLabels(context: context, size: size)
             }
         }
-        .overlay(alignment: .topTrailing) { legend }
-        .background(Color.black.opacity(0.85))
     }
 
     private var legend: some View {
         VStack(alignment: .leading, spacing: 4) {
             Label("Mix", systemImage: "circle.fill").foregroundStyle(.orange)
-            if guitarPoints != nil {
+            if curves.guitar != nil {
                 Label("Guitar", systemImage: "circle.fill").foregroundStyle(.cyan)
             }
             if referencePoints != nil {
                 Label("Reference", systemImage: "circle.dashed").foregroundStyle(.cyan.opacity(0.6))
             }
-            if differencePoints != nil {
+            if curves.difference != nil {
                 Label("Guitar \u{2212} Mix", systemImage: "circle.dotted").foregroundStyle(.green)
             }
         }
         .font(sizes.legend)
         .padding(8)
+    }
+
+    private func drawDifferenceLabels(context: GraphicsContext, size: CGSize) {
+        for db in GraphScale.differenceLabelValues {
+            let y = GraphScale.y(forDifferenceDB: db, height: size.height)
+            context.draw(Text(String(format: "%+.0f", db)).font(sizes.axis).foregroundStyle(Color.green.opacity(0.7)),
+                         at: CGPoint(x: size.width - 6, y: min(max(y, 8), size.height - 8)),
+                         anchor: .trailing)
+        }
+    }
+
+    private func drawCurve(_ points: [SpectrumPoint], color: Color, dash: [CGFloat] = [], context: GraphicsContext, size: CGSize,
+                           y: ((Float) -> Double)? = nil) {
+        guard let first = points.first else { return }
+        let yFor = y ?? { GraphScale.y(forDB: $0, height: size.height) }
+        var path = Path()
+        path.move(to: CGPoint(x: GraphScale.x(forHz: first.frequencyHz, width: size.width), y: yFor(first.db)))
+        for point in points.dropFirst() {
+            path.addLine(to: CGPoint(x: GraphScale.x(forHz: point.frequencyHz, width: size.width), y: yFor(point.db)))
+        }
+        context.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: 1.5, dash: dash))
+    }
+}
+
+/// The grid and its labels never change with the audio, so they sit in their
+/// own view with no changing input and are not redrawn on every frame.
+private struct GraphGrid: View {
+    @Environment(\.displaySizes) private var sizes
+
+    var body: some View {
+        Canvas { context, size in
+            drawGrid(context: context, size: size)
+        }
     }
 
     private func drawGrid(context: GraphicsContext, size: CGSize) {
@@ -119,26 +156,5 @@ struct SpectrumGraphView: View {
                          at: CGPoint(x: 6, y: y + 2),
                          anchor: .topLeading)
         }
-    }
-
-    private func drawDifferenceLabels(context: GraphicsContext, size: CGSize) {
-        for db in GraphScale.differenceLabelValues {
-            let y = GraphScale.y(forDifferenceDB: db, height: size.height)
-            context.draw(Text(String(format: "%+.0f", db)).font(sizes.axis).foregroundStyle(Color.green.opacity(0.7)),
-                         at: CGPoint(x: size.width - 6, y: min(max(y, 8), size.height - 8)),
-                         anchor: .trailing)
-        }
-    }
-
-    private func drawCurve(_ points: [SpectrumPoint], color: Color, dash: [CGFloat] = [], context: GraphicsContext, size: CGSize,
-                           y: ((Float) -> Double)? = nil) {
-        guard let first = points.first else { return }
-        let yFor = y ?? { GraphScale.y(forDB: $0, height: size.height) }
-        var path = Path()
-        path.move(to: CGPoint(x: GraphScale.x(forHz: first.frequencyHz, width: size.width), y: yFor(first.db)))
-        for point in points.dropFirst() {
-            path.addLine(to: CGPoint(x: GraphScale.x(forHz: point.frequencyHz, width: size.width), y: yFor(point.db)))
-        }
-        context.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: 1.5, dash: dash))
     }
 }

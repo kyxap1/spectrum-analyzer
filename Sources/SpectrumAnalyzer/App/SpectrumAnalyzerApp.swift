@@ -17,14 +17,10 @@ struct SpectrumAnalyzerApp: App {
 /// window renders, redrawing at 30 fps (KTD5).
 @MainActor
 final class AppModel: ObservableObject {
-    @Published var mixPoints: [SpectrumPoint] = []
-    @Published var guitarPoints: [SpectrumPoint]?
-    @Published var differencePoints: [SpectrumPoint]?
+    let curves = LiveCurves()
     @Published var showDifference = UserDefaults.standard.bool(forKey: "graph.showDifference") {
         didSet { UserDefaults.standard.set(showDifference, forKey: "graph.showDifference") }
     }
-    @Published var mixLevel: LevelReading?
-    @Published var guitarLevel: LevelReading?
     @Published var banners: [StatusBanner] = []
     @Published var pinned = false
     @Published var timeConstant = 3.0 { didSet { resetAnalyzers() } }
@@ -102,7 +98,7 @@ final class AppModel: ObservableObject {
     @Published var exportStatus = ""
     @Published var snapshots: [Snapshot] = []
     @Published var snapshotError: String?
-    @Published var comparison: Comparison?
+    let live = LiveLevels()
     /// The outcome of the last Set reference, shown next to its button.
     @Published var referenceStatus = ""
     /// Survives a restart: the amp keeps its knob positions when the app quits.
@@ -137,6 +133,9 @@ final class AppModel: ObservableObject {
     /// Set by anything the export document shows besides the logs' growth.
     private var exportDirty = false
     private var exportSequence = 0
+    private var tickCount = 0
+    /// Meters and the comparison refresh at 10 Hz; more is not readable.
+    private static let levelsEveryTicks = 3
     private var exportBuiltAt = Date.distantPast
     /// Meter readings change every tick; the document follows them this often.
     private static let exportRefreshInterval: TimeInterval = 0.25
@@ -283,10 +282,10 @@ final class AppModel: ObservableObject {
         guard exportRunning else { return }
         exportBuiltAt = Date()
         let guitar = interfaceInput.status == .running
-            ? ExportSource(log: guitarLog, thresholdDBFS: guitarThresholdDBFS, reading: guitarLevel) : nil
-        let mix = ExportSource(log: mixLog, thresholdDBFS: mixThresholdDBFS, reading: mixLevel)
+            ? ExportSource(log: guitarLog, thresholdDBFS: guitarThresholdDBFS, reading: live.rawGuitar) : nil
+        let mix = ExportSource(log: mixLog, thresholdDBFS: mixThresholdDBFS, reading: live.rawMix)
         exportServer.update(LevelsDocument.make(state: state, windowSeconds: windowSeconds, guitar: guitar, mix: mix,
-                                                reference: reference, comparison: comparison, now: Date()).encoded())
+                                                reference: reference, comparison: live.comparison, now: Date()).encoded())
     }
 
     private var windowHops: Int { Int(Double(windowSeconds) / Payload.hopSeconds) }
@@ -339,14 +338,14 @@ final class AppModel: ObservableObject {
 
     func clearReference() {
         reference = nil
-        comparison = nil
+        live.setComparison(nil)
         referenceStatus = ""
     }
 
     private func refreshComparison() {
         guard let reference else { return }
         let window = guitarLog.window(threshold: guitarThresholdDBFS, limit: windowHops, since: referenceMark)
-        comparison = Comparison.make(reference: reference, window: window, windowHops: windowHops)
+        live.setComparison(Comparison.make(reference: reference, window: window, windowHops: windowHops))
     }
 
     enum LevelSource { case guitar, mix }
@@ -453,8 +452,14 @@ final class AppModel: ObservableObject {
     }
 
     private func refreshDeviceList() {
-        selectedDeviceUID = interfaceInput.deviceUID
-        ticks = Set(interfaceInput.ticks)
+        setIfChanged(\.selectedDeviceUID, interfaceInput.deviceUID)
+        setIfChanged(\.ticks, Set(interfaceInput.ticks))
+    }
+
+    /// `@Published` announces every assignment, equal or not, and the tick
+    /// runs 30 times a second; only a real change should re-render the window.
+    private func setIfChanged<Value: Equatable>(_ keyPath: ReferenceWritableKeyPath<AppModel, Value>, _ value: Value) {
+        if self[keyPath: keyPath] != value { self[keyPath: keyPath] = value }
     }
 
     /// `AudioDevices.inputDevices` makes CoreAudio HAL calls, which must never
@@ -476,17 +481,18 @@ final class AppModel: ObservableObject {
     }
 
     private func syncSessionState() {
-        state = session.state
+        setIfChanged(\.state, session.state)
         // `scrubPosition` stays at the frame replay started from, so the
         // thumb has to follow the analyzer head to move during playback.
-        scrubSeconds = session.currentHead / HistoryRing.sampleRate
+        setIfChanged(\.scrubSeconds, session.currentHead / HistoryRing.sampleRate)
         let upper = max(mixRing.head, HistoryRing.sampleRate) / HistoryRing.sampleRate
         let lower = mixRing.range.lowerBound / HistoryRing.sampleRate
-        scrubRangeSeconds = lower...max(lower, upper)
-        adviceAvailable = AdviceAvailability.isAvailable(historyRange: mixRing.range)
+        setIfChanged(\.scrubRangeSeconds, lower...max(lower, upper))
+        setIfChanged(\.adviceAvailable, AdviceAvailability.isAvailable(historyRange: mixRing.range))
     }
 
     private func tick() {
+        tickCount &+= 1
         mixWorker.drain()
         guitarWorker.drain()
         refreshDeviceList()
@@ -496,24 +502,28 @@ final class AppModel: ObservableObject {
             mixLog.advance(ring: mixRing, to: mixRing.head)
             guitarLog.advance(ring: guitarRing, to: guitarRing.head)
         }
-        refreshComparison()
 
         let head = session.currentHead
-        mixPoints = mixAnalyzer.advance(ring: mixRing, to: head)
-        guitarPoints = interfaceInput.status == .running ? guitarAnalyzer.advance(ring: guitarRing, to: head) : nil
-        differencePoints = showDifference ? guitarPoints.map { GraphScale.difference(guitar: $0, mix: mixPoints) } : nil
-        mixLevel = LevelMeter.read(ring: mixRing, head: head)
-        guitarLevel = interfaceInput.status == .running ? LevelMeter.read(ring: guitarRing, head: head) : nil
-        if case .unavailable(let status) = interfaceInput.status { inputFailure = status } else { inputFailure = nil }
+        let mixPoints = mixAnalyzer.advance(ring: mixRing, to: head)
+        let guitarPoints = interfaceInput.status == .running ? guitarAnalyzer.advance(ring: guitarRing, to: head) : nil
+        curves.set(mix: mixPoints, guitar: guitarPoints,
+                   difference: showDifference ? guitarPoints.map { GraphScale.difference(guitar: $0, mix: mixPoints) } : nil)
+        if tickCount % Self.levelsEveryTicks == 0 {
+            live.setMeters(guitar: interfaceInput.status == .running ? LevelMeter.read(ring: guitarRing, head: head) : nil,
+                           mix: LevelMeter.read(ring: mixRing, head: head),
+                           seconds: SpectrumAnalyzer.liveHopSeconds * Double(Self.levelsEveryTicks))
+            refreshComparison()
+        }
+        if case .unavailable(let status) = interfaceInput.status { setIfChanged(\.inputFailure, status) } else { setIfChanged(\.inputFailure, nil) }
         let sequence = mixLog.nextSequence + guitarLog.nextSequence
         if exportDirty || sequence != exportSequence || Date().timeIntervalSince(exportBuiltAt) >= Self.exportRefreshInterval {
             exportDirty = false
             exportSequence = sequence
             refreshExport()
         }
-        banners = statusBanners(microphone: Permissions.microphoneStatus(),
-                                systemAudioRecording: Permissions.systemAudioRecordingStatus(),
-                                mix: mixTap.status)
+        setIfChanged(\.banners, statusBanners(microphone: Permissions.microphoneStatus(),
+                                              systemAudioRecording: Permissions.systemAudioRecordingStatus(),
+                                              mix: mixTap.status))
     }
 }
 
@@ -591,9 +601,7 @@ struct ContentView: View {
     }
 
     private var graph: some View {
-        SpectrumGraphView(mixPoints: model.mixPoints,
-                          guitarPoints: model.guitarPoints,
-                          differencePoints: model.differencePoints,
+        SpectrumGraphView(curves: model.curves,
                           referencePoints: model.reference.map(GraphScale.points(of:)))
     }
 

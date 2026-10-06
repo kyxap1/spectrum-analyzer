@@ -51,6 +51,7 @@ struct Reference: Codable, Equatable {
 /// press reads as dashes rather than 0 dB.
 struct Comparison: Equatable {
     let partial: Bool
+    let windowHops: Int
     let activeSeconds: Double
     let levelDifferenceDB: Float?
     let octaveDifferencesDB: [Float]?
@@ -59,7 +60,7 @@ struct Comparison: Equatable {
     static func make(reference: Reference, window: ActiveWindow, windowHops: Int) -> Comparison {
         let partial = window.hops.count < windowHops
         guard !window.hops.isEmpty else {
-            return Comparison(partial: partial, activeSeconds: 0, levelDifferenceDB: nil,
+            return Comparison(partial: partial, windowHops: windowHops, activeSeconds: 0, levelDifferenceDB: nil,
                               octaveDifferencesDB: nil, bandDifferencesDB: nil)
         }
         let floor = Payload.floorDB
@@ -67,6 +68,7 @@ struct Comparison: Equatable {
         let referenceOctaves = OctaveBands.power(fromBands: reference.guitarBands)
         return Comparison(
             partial: partial,
+            windowHops: windowHops,
             activeSeconds: window.activeSeconds,
             levelDifferenceDB: window.levelDBFS - reference.guitarLevelDBFS,
             octaveDifferencesDB: zip(liveOctaves, referenceOctaves).map { dB($0, floor: floor) - dB($1, floor: floor) },

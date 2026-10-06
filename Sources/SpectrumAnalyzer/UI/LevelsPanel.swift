@@ -6,25 +6,44 @@ import SwiftUI
 /// the More sheet in display mode. The guitar meter reads unavailable while
 /// the interface is not captured.
 struct LevelsPanel: View {
-    @ObservedObject var model: AppModel
+    /// Not observed: the fast-changing parts watch `LiveLevels` themselves.
+    let model: AppModel
     @Environment(\.displaySizes) private var sizes
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .top, spacing: sizes.isDisplayMode ? 48 : 24) {
-                MeterView(title: "Guitar", reading: model.guitarLevel)
-                MeterView(title: "Mix", reading: model.mixLevel)
-                Spacer()
-            }
+            MetersRow(live: model.live)
             if !sizes.isDisplayMode {
                 LevelsControls(model: model)
             }
-            if model.reference != nil {
-                ComparisonView(comparison: model.comparison, windowSeconds: model.windowSeconds)
-            }
+            ComparisonSection(live: model.live)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
+    }
+}
+
+private struct MetersRow: View {
+    @ObservedObject var live: LiveLevels
+    @Environment(\.displaySizes) private var sizes
+
+    var body: some View {
+        HStack(alignment: .top, spacing: sizes.isDisplayMode ? 48 : 24) {
+            MeterView(title: "Guitar", reading: live.guitar)
+            MeterView(title: "Mix", reading: live.mix)
+            Spacer()
+        }
+    }
+}
+
+private struct ComparisonSection: View {
+    @ObservedObject var live: LiveLevels
+
+    var body: some View {
+        if let comparison = live.comparison {
+            ComparisonView(comparison: comparison,
+                           windowSeconds: Int(Double(comparison.windowHops) * Payload.hopSeconds))
+        }
     }
 }
 
@@ -108,14 +127,25 @@ private struct MeterView: View {
             HStack(spacing: 8) {
                 Text(title).font(sizes.label)
                 if let reading {
-                    Text("RMS \(LevelMeter.format(reading.rmsDBFS))").font(sizes.readout).monospacedDigit()
-                    Text("Peak \(LevelMeter.format(reading.peakDBFS)) dBFS").font(sizes.readout).monospacedDigit()
+                    Text("RMS").font(sizes.label)
+                    readout(reading.rmsDBFS)
+                    Text("Peak").font(sizes.label)
+                    readout(reading.peakDBFS)
+                    Text("dBFS").font(sizes.label)
                 } else {
                     Text("not captured").font(sizes.readout).foregroundStyle(.secondary)
                 }
             }
             bar(for: reading)
         }
+    }
+
+    /// A fixed-width box, so a changing number never shifts its neighbours.
+    private func readout(_ dBFS: Float) -> some View {
+        Text(LevelMeter.format(dBFS))
+            .font(sizes.readout)
+            .monospacedDigit()
+            .frame(width: sizes.isDisplayMode ? 130 : 52, alignment: .trailing)
     }
 
     private func bar(for reading: LevelReading?) -> some View {
@@ -142,7 +172,7 @@ private struct MeterView: View {
 /// signed number with a bar centred on 0 dB, marked partial until N active
 /// seconds have accumulated since the press.
 private struct ComparisonView: View {
-    let comparison: Comparison?
+    let comparison: Comparison
     let windowSeconds: Int
     @Environment(\.displaySizes) private var sizes
 
@@ -153,16 +183,14 @@ private struct ComparisonView: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack {
                 Text("Overall").font(sizes.label)
-                Text(Self.signed(comparison?.levelDifferenceDB) + " dB").font(sizes.readout).monospacedDigit()
-                if let comparison {
-                    Text(String(format: "%.1f / %d s", comparison.activeSeconds, windowSeconds))
-                        .font(sizes.label).foregroundStyle(.secondary).monospacedDigit()
-                    if comparison.partial { Text("partial").font(sizes.label).foregroundStyle(.orange) }
-                }
+                Text(Self.signed(comparison.levelDifferenceDB) + " dB").font(sizes.readout).monospacedDigit()
+                Text(String(format: "%.1f / %d s", comparison.activeSeconds, windowSeconds))
+                    .font(sizes.label).foregroundStyle(.secondary).monospacedDigit()
+                if comparison.partial { Text("partial").font(sizes.label).foregroundStyle(.orange) }
             }
             HStack(spacing: 6) {
                 ForEach(0..<OctaveBands.labels.count, id: \.self) { i in
-                    let difference = comparison?.octaveDifferencesDB?[i]
+                    let difference = comparison.octaveDifferencesDB?[i]
                     VStack(spacing: 2) {
                         Text(OctaveBands.labels[i]).font(sizes.isDisplayMode ? sizes.axis : .caption)
                         Text(Self.signed(difference)).font(sizes.isDisplayMode ? sizes.label : .caption).monospacedDigit()

@@ -1,4 +1,29 @@
 import Accelerate
+import Synchronization
+
+/// The FFT setup and Hann window for one size, built once: creating a setup
+/// per call was most of an FFT's cost. A setup is read-only while a transform
+/// runs, so any thread may share it; it lives for the whole process.
+private struct FFTPlan: @unchecked Sendable {
+    let setup: FFTSetup
+    let window: [Float]
+}
+
+private enum FFTPlans {
+    private static let plans = Mutex<[Int: FFTPlan]>([:])
+
+    static func plan(size n: Int) -> FFTPlan? {
+        plans.withLock { plans in
+            if let plan = plans[n] { return plan }
+            guard let setup = vDSP_create_fftsetup(vDSP_Length(log2(Double(n))), FFTRadix(kFFTRadix2)) else { return nil }
+            var window = [Float](repeating: 0, count: n)
+            vDSP_hann_window(&window, vDSP_Length(n), Int32(vDSP_HANN_NORM))
+            let plan = FFTPlan(setup: setup, window: window)
+            plans[n] = plan
+            return plan
+        }
+    }
+}
 
 /// Runs a Hann-windowed real FFT over `fftSize` frames of `ring` ending at
 /// absolute frame `endFrame`, summing stereo to mono first, and returns power
@@ -22,16 +47,13 @@ func fftPowerSpectrum(interleaved: [Int16], fftSize: Int) -> (power: [Float], bi
         mono[i] = (Float(interleaved[i * 2]) + Float(interleaved[i * 2 + 1])) / 2 / 32768
     }
 
-    var window = [Float](repeating: 0, count: n)
-    vDSP_hann_window(&window, vDSP_Length(n), Int32(vDSP_HANN_NORM))
-    vDSP.multiply(mono, window, result: &mono)
-
     var power = [Float](repeating: 0, count: n / 2)
     let log2n = vDSP_Length(log2(Double(n)))
-    guard let setup = vDSP_create_fftsetup(log2n, FFTRadix(kFFTRadix2)) else {
+    guard let plan = FFTPlans.plan(size: n) else {
         return (power, binHz)
     }
-    defer { vDSP_destroy_fftsetup(setup) }
+    let setup = plan.setup
+    vDSP.multiply(mono, plan.window, result: &mono)
 
     var realp = [Float](repeating: 0, count: n / 2)
     var imagp = [Float](repeating: 0, count: n / 2)

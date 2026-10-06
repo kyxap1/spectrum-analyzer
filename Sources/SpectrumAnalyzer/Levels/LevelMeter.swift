@@ -3,6 +3,23 @@ import Foundation
 struct LevelReading: Equatable {
     let rmsDBFS: Float
     let peakDBFS: Float
+
+    /// What the meter shows: a rise is immediate and a fall is limited to a
+    /// rate, so a sliding-window peak does not jump back and forth.
+    func released(from previous: LevelReading?, seconds: Double) -> LevelReading {
+        guard let previous else { return self }
+        return LevelReading(rmsDBFS: Self.fall(rmsDBFS, from: previous.rmsDBFS, rate: 24, seconds: seconds),
+                            peakDBFS: Self.fall(peakDBFS, from: previous.peakDBFS, rate: 12, seconds: seconds))
+    }
+
+    private static let floorDBFS: Float = -120
+
+    private static func fall(_ new: Float, from previous: Float, rate: Float, seconds: Double) -> Float {
+        guard previous.isFinite else { return new }
+        let released = previous - rate * Float(seconds)
+        let shown = max(new, released)
+        return shown < floorDBFS ? -.infinity : shown
+    }
 }
 
 /// KTD6: RMS over the last 300 ms and peak over the last 1 s of a ring at a
