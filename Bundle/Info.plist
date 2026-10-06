@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>Spectrum Analyzer</string>
+	<key>CFBundleDisplayName</key>
+	<string>Spectrum Analyzer</string>
+	<key>CFBundleIdentifier</key>
+	<string>pro.kyxap.SpectrumAnalyzer</string>
+	<key>CFBundleExecutable</key>
+	<string>SpectrumAnalyzer</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleShortVersionString</key>
+	<string>__VERSION__</string>
+	<key>CFBundleVersion</key>
+	<string>__VERSION__</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>26.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Spectrum Analyzer needs microphone access to analyze the guitar signal from the selected audio interface input.</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Spectrum Analyzer needs system audio recording access to show the mix spectrum of what the Mac is currently playing.</string>
+</dict>
+</plist>
