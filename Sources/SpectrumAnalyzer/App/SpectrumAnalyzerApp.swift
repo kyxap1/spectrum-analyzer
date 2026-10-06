@@ -245,7 +245,6 @@ final class AppModel: ObservableObject {
         peakHold.reset()
         mixLog.reset()
         guitarLog.reset()
-        live.clearPeaks()
         referenceMark = guitarLog.nextSequence
     }
 
@@ -318,13 +317,11 @@ final class AppModel: ObservableObject {
     func setReference() {
         let guitar = guitarLog.window(threshold: guitarThresholdDBFS, limit: windowHops)
         let mix = mixLog.window(threshold: mixThresholdDBFS, limit: windowHops)
-        guard let made = Reference.make(guitar: guitar, mix: mix, windowSeconds: windowSeconds,
-                                        guitarPeakDBFS: live.guitar?.peakDBFS) else {
+        guard let made = Reference.make(guitar: guitar, mix: mix, windowSeconds: windowSeconds) else {
             referenceStatus = "No active guitar in the kept history. Reference not set."
             return
         }
         reference = made
-        live.clearPeaks()
         referenceMark = guitarLog.nextSequence
         referenceStatus = String(format: "Reference set from %.1f of %d s", made.activeSeconds, windowSeconds)
         refreshComparison()
@@ -371,8 +368,7 @@ final class AppModel: ObservableObject {
     private func refreshComparison() {
         guard let reference else { return }
         let window = guitarLog.window(threshold: guitarThresholdDBFS, limit: windowHops, since: referenceMark)
-        live.setComparison(Comparison.make(reference: reference, window: window, windowHops: windowHops,
-                                           livePeakDBFS: live.guitar?.peakDBFS))
+        live.setComparison(Comparison.make(reference: reference, window: window, windowHops: windowHops))
     }
 
     enum LevelSource { case guitar, mix }
@@ -540,7 +536,9 @@ final class AppModel: ObservableObject {
         }
         graph.send(GraphFrame(guitar: guitarPoints, mix: mixPoints,
                               peakHold: showPeakHold && guitarPoints != nil ? peakHold.points : nil,
-                              reference: referencePoints, toneStepDB: Float(toneStep)))
+                              reference: referencePoints,
+                              referenceOffsetDB: live.comparison?.loudnessDifferenceDB ?? 0,
+                              toneStepDB: Float(toneStep)))
         if tickCount % Self.levelsEveryTicks == 0 {
             live.setMeters(guitar: interfaceInput.status == .running ? LevelMeter.read(ring: guitarRing, head: head) : nil,
                            mix: LevelMeter.read(ring: mixRing, head: head),

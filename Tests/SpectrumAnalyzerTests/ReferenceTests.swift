@@ -1,3 +1,4 @@
+import Darwin
 import Testing
 @testable import SpectrumAnalyzer
 
@@ -9,9 +10,9 @@ private func steps(_ log: BandLog, _ ring: HistoryRing, from: Int, hops: Int) {
     for i in 1...hops { log.advance(ring: ring, to: from + i * hop) }
 }
 
-private func hop(sequence: Int, level: Float = -20, bands: [Float]) -> LogHop {
+private func hop(sequence: Int, level: Float = -20, bands: [Float], peak: Float = -.infinity) -> LogHop {
     LogHop(sequence: sequence, endFrame: (sequence + 1) * hop, rmsDBFS: level, bands: bands,
-           display: [Float](repeating: 1, count: SpectrumAnalyzer.displayPointCount))
+           display: [Float](repeating: 1, count: SpectrumAnalyzer.displayPointCount), peakDBFS: peak)
 }
 
 @Suite("Reference")
@@ -71,7 +72,7 @@ struct ReferenceTests {
         #expect(reference.activeSeconds == 6)
     }
 
-    @Test("a 6 dB rise at 1 kHz shows as +3 dB in the 1 kHz octave band and 0 dB elsewhere")
+    @Test("a 6 dB rise at 1 kHz shows as +3 dB in the 1 kHz octave against the others, all level-matched by the loudness difference")
     func octaveBandDifference() throws {
         let flat = [Float](repeating: 1, count: bandCount)
         var louder = flat
@@ -80,9 +81,36 @@ struct ReferenceTests {
                                                     mix: BandLog.average([]), windowSeconds: 10))
         let comparison = Comparison.make(reference: reference, window: BandLog.average([hop(sequence: 1, bands: louder)]), windowHops: 20)
         let octaves = try #require(comparison.octaveDifferencesDB)
+        let loudness = try #require(comparison.loudnessDifferenceDB)
         #expect(octaves.count == 10)
-        #expect(abs(octaves[5] - 3.01) < 0.05)
-        #expect(octaves.enumerated().allSatisfy { $0.offset == 5 || abs($0.element) < 0.001 })
+        #expect(loudness > 0)
+        #expect(abs(octaves[5] + loudness - 3.01) < 0.05)
+        #expect(octaves.enumerated().allSatisfy { $0.offset == 5 || abs($0.element + loudness) < 0.001 })
+    }
+
+    @Test("covers AE6: the reference's spectrum 3 dB louder gives +3 dB loudness and every octave within 0.1 dB of 0")
+    func louderSameTone() throws {
+        let shaped = (0..<bandCount).map { Float(1 + $0 % 5) }
+        let reference = try #require(Reference.make(guitar: BandLog.average([hop(sequence: 0, bands: shaped)]),
+                                                    mix: BandLog.average([]), windowSeconds: 10))
+        let louder = shaped.map { $0 * Float(pow(10, 0.3)) }
+        let comparison = Comparison.make(reference: reference, window: BandLog.average([hop(sequence: 1, bands: louder)]), windowHops: 20)
+        #expect(abs(try #require(comparison.loudnessDifferenceDB) - 3) < 0.01)
+        #expect(try #require(comparison.octaveDifferencesDB).allSatisfy { abs($0) < 0.1 })
+    }
+
+    @Test("a reference made from a current window carries average peak and crest, and the comparison reads their differences")
+    func referenceCarriesCrest() throws {
+        let flat = [Float](repeating: 1, count: bandCount)
+        let reference = try #require(Reference.make(guitar: BandLog.average([hop(sequence: 0, level: -20, bands: flat, peak: -6)]),
+                                                    mix: BandLog.average([]), windowSeconds: 10))
+        #expect(reference.guitarAveragePeakDBFS == -6)
+        #expect(reference.guitarCrestDB == 14)
+        let window = BandLog.average([hop(sequence: 1, level: -20, bands: flat, peak: -10)])
+        let comparison = Comparison.make(reference: reference, window: window, windowHops: 20)
+        #expect(comparison.averagePeakDifferenceDB == -4)
+        #expect(comparison.crestDifferenceDB == -4)
+        #expect(comparison.hopCrestDifferencesDB == [-4])
     }
 
     @Test("octave bands sum their third-octave neighbours, including the edges")
@@ -97,15 +125,17 @@ struct ReferenceTests {
         #expect(OctaveBands.labels == ["31", "62", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"])
     }
 
-    @Test("the held live peak is compared with the reference's peak, and is nil when either is unknown")
-    func peakDifference() throws {
+    @Test("a reference without crest data reads crest and average-peak differences as unknown, not 0 dB")
+    func crestUnknownWithoutData() throws {
         let flat = [Float](repeating: 1, count: bandCount)
-        let window = BandLog.average([hop(sequence: 0, bands: flat)])
-        let reference = try #require(Reference.make(guitar: window, mix: BandLog.average([]), windowSeconds: 10, guitarPeakDBFS: -6))
-        #expect(Comparison.make(reference: reference, window: window, windowHops: 20, livePeakDBFS: -3).peakDifferenceDB == 3)
-        #expect(Comparison.make(reference: reference, window: window, windowHops: 20).peakDifferenceDB == nil)
-        let noPeak = try #require(Reference.make(guitar: window, mix: BandLog.average([]), windowSeconds: 10, guitarPeakDBFS: -.infinity))
-        #expect(noPeak.guitarPeakDBFS == nil)
+        let reference = try #require(Reference.make(guitar: BandLog.average([hop(sequence: 0, bands: flat)]),
+                                                    mix: BandLog.average([]), windowSeconds: 10))
+        #expect(reference.guitarCrestDB == nil)
+        let comparison = Comparison.make(reference: reference, window: BandLog.average([hop(sequence: 1, bands: flat, peak: -6)]),
+                                         windowHops: 20)
+        #expect(comparison.crestDifferenceDB == nil)
+        #expect(comparison.averagePeakDifferenceDB == nil)
+        #expect(comparison.hopCrestDifferencesDB.isEmpty)
     }
 
     @Test("Set reference with no active guitar hops returns no reference")

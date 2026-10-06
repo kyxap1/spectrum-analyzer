@@ -47,14 +47,24 @@ struct LevelMeterTests {
 
 @Suite("LevelReading")
 struct LevelReadingTests {
-    @Test("the peak is held while RMS falls at a limited rate")
+    @Test("RMS falls at a limited rate and the peak is the plain 1 s peak, never held")
     func releases() {
         let loud = LevelReading(rmsDBFS: -10, peakDBFS: -3)
         let quiet = LevelReading(rmsDBFS: -40, peakDBFS: -30)
         #expect(loud.shown(after: quiet, seconds: 0.1) == loud)
         let fallen = quiet.shown(after: loud, seconds: 0.5)
         #expect(abs(fallen.rmsDBFS - -22) < 0.001)
-        #expect(fallen.peakDBFS == -3)
+        #expect(fallen.peakDBFS == -30)
+    }
+
+    @Test("a burst followed by 1.2 s of silence reads minus infinity peak")
+    func burstThenSilence() {
+        let ring = HistoryRing(capacity: 4 * rate)
+        writeSine(ring, frequency: 440, amplitudeDBFS: -6, seconds: 0.1)
+        ring.write(at: rate * 13 / 10 - 1, [0, 0])
+        let burst = LevelMeter.read(ring: ring, head: rate / 10)
+        let after = LevelMeter.read(ring: ring, head: rate * 13 / 10).shown(after: burst, seconds: 1.2)
+        #expect(after.peakDBFS == -.infinity)
     }
 
     @Test("silence settles to minus infinity and the first reading is shown as is")
@@ -64,6 +74,6 @@ struct LevelReadingTests {
         let nearFloor = LevelReading(rmsDBFS: -119, peakDBFS: -119)
         let settled = silent.shown(after: nearFloor, seconds: 1)
         #expect(settled.rmsDBFS == -.infinity)
-        #expect(settled.peakDBFS == -119)
+        #expect(settled.peakDBFS == -.infinity)
     }
 }

@@ -5,11 +5,11 @@ struct LevelReading: Equatable {
     let peakDBFS: Float
 
     /// What the meter shows: RMS rises at once and falls at a limited rate;
-    /// the peak is held, never falling, until the player clears it.
+    /// the peak is the plain 1 s peak.
     func shown(after previous: LevelReading?, seconds: Double) -> LevelReading {
         guard let previous else { return self }
         return LevelReading(rmsDBFS: Self.fall(rmsDBFS, from: previous.rmsDBFS, rate: 24, seconds: seconds),
-                            peakDBFS: max(peakDBFS, previous.peakDBFS))
+                            peakDBFS: peakDBFS)
     }
 
     private static let floorDBFS: Float = -120

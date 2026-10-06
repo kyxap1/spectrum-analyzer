@@ -3,9 +3,10 @@ import Testing
 @testable import SpectrumAnalyzer
 
 private func makeReference(name: String? = nil) -> Reference {
-    Reference(name: name, windowSeconds: 10, activeSeconds: 10, guitarLevelDBFS: -18.5, guitarPeakDBFS: -6,
+    Reference(name: name, windowSeconds: 10, activeSeconds: 10, guitarLevelDBFS: -18.5,
               guitarBands: (0..<31).map { Float($0) / 100 }, guitarDisplay: [Float](repeating: 0.25, count: 240),
-              mixLevelDBFS: -20, mixBands: [Float](repeating: 0.5, count: 31))
+              mixLevelDBFS: -20, mixBands: [Float](repeating: 0.5, count: 31),
+              guitarAveragePeakDBFS: -6, guitarCrestDB: 12.5, guitarOctaveCrestDB: (0..<10).map { Float($0) })
 }
 
 private func temporaryURL() -> URL {
@@ -73,7 +74,7 @@ struct SnapshotStoreTests {
         #expect(SnapshotStore(url: temporaryURL()).snapshots.isEmpty)
     }
 
-    @Test("loading a snapshot yields a reference equal to the saved one, carrying the name")
+    @Test("loading a snapshot yields a reference equal to the saved one, carrying the name, average peak and crest")
     func loadEqualsSaved() {
         let url = temporaryURL()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
@@ -83,5 +84,24 @@ struct SnapshotStoreTests {
         var expected = makeReference()
         expected.name = "Verse"
         #expect(SnapshotStore(url: url).snapshots.first { $0.id == saved.id }?.reference == expected)
+    }
+
+    @Test("covers AE5: a snapshot in the old shape, with the removed peak key and no crest, decodes and compares by loudness")
+    func oldSnapshotDecodes() throws {
+        let flat = [Float](repeating: 1, count: 31)
+        let old: [String: Any] = [
+            "name": "Old", "windowSeconds": 10, "activeSeconds": 10, "guitarLevelDBFS": -18.5, "guitarPeakDBFS": -6,
+            "guitarBands": flat, "guitarDisplay": [Float](repeating: 1, count: SpectrumAnalyzer.displayPointCount),
+            "mixLevelDBFS": -20, "mixBands": flat,
+        ]
+        let reference = try JSONDecoder().decode(Reference.self, from: JSONSerialization.data(withJSONObject: old))
+        #expect(reference.guitarCrestDB == nil)
+        let window = BandLog.average([LogHop(sequence: 0, endFrame: BandLog.hopFrames, rmsDBFS: -20, bands: flat.map { $0 * 2 },
+                                             display: [Float](repeating: 1, count: SpectrumAnalyzer.displayPointCount), peakDBFS: -6)])
+        let comparison = Comparison.make(reference: reference, window: window, windowHops: 20)
+        #expect(abs(try #require(comparison.loudnessDifferenceDB) - 3.01) < 0.01)
+        #expect(comparison.averagePeakDifferenceDB == nil)
+        #expect(comparison.crestDifferenceDB == nil)
+        #expect(comparison.octaveCrestDifferencesDB == nil)
     }
 }
