@@ -19,6 +19,8 @@ struct SpectrumAnalyzerApp: App {
 final class AppModel: ObservableObject {
     @Published var mixPoints: [SpectrumPoint] = []
     @Published var guitarPoints: [SpectrumPoint]?
+    @Published var mixLevel: LevelReading?
+    @Published var guitarLevel: LevelReading?
     @Published var banners: [StatusBanner] = []
     @Published var pinned = false
     @Published var timeConstant = 3.0 { didSet { resetAnalyzers() } }
@@ -319,6 +321,8 @@ final class AppModel: ObservableObject {
         let head = session.currentHead
         mixPoints = mixAnalyzer.advance(ring: mixRing, to: head)
         guitarPoints = interfaceInput.status == .running ? guitarAnalyzer.advance(ring: guitarRing, to: head) : nil
+        mixLevel = LevelMeter.read(ring: mixRing, head: head)
+        guitarLevel = interfaceInput.status == .running ? LevelMeter.read(ring: guitarRing, head: head) : nil
         if case .unavailable(let status) = interfaceInput.status { inputFailure = status } else { inputFailure = nil }
         banners = statusBanners(microphone: Permissions.microphoneStatus(),
                                 systemAudioRecording: Permissions.systemAudioRecordingStatus(),
@@ -342,6 +346,7 @@ struct ContentView: View {
             VSplitView {
                 VStack(spacing: 0) {
                     SpectrumGraphView(mixPoints: model.mixPoints, guitarPoints: model.guitarPoints)
+                    LevelsPanel(model: model)
                     ControlsBar(state: model.state,
                                scrubRangeSeconds: model.scrubRangeSeconds,
                                scrubSeconds: $model.scrubSeconds,
