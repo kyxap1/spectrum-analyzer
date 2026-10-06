@@ -19,6 +19,10 @@ struct SpectrumAnalyzerApp: App {
 final class AppModel: ObservableObject {
     @Published var mixPoints: [SpectrumPoint] = []
     @Published var guitarPoints: [SpectrumPoint]?
+    @Published var differencePoints: [SpectrumPoint]?
+    @Published var showDifference = UserDefaults.standard.bool(forKey: "graph.showDifference") {
+        didSet { UserDefaults.standard.set(showDifference, forKey: "graph.showDifference") }
+    }
     @Published var mixLevel: LevelReading?
     @Published var guitarLevel: LevelReading?
     @Published var banners: [StatusBanner] = []
@@ -362,6 +366,7 @@ final class AppModel: ObservableObject {
         let head = session.currentHead
         mixPoints = mixAnalyzer.advance(ring: mixRing, to: head)
         guitarPoints = interfaceInput.status == .running ? guitarAnalyzer.advance(ring: guitarRing, to: head) : nil
+        differencePoints = showDifference ? guitarPoints.map { GraphScale.difference(guitar: $0, mix: mixPoints) } : nil
         mixLevel = LevelMeter.read(ring: mixRing, head: head)
         guitarLevel = interfaceInput.status == .running ? LevelMeter.read(ring: guitarRing, head: head) : nil
         if case .unavailable(let status) = interfaceInput.status { inputFailure = status } else { inputFailure = nil }
@@ -386,12 +391,16 @@ struct ContentView: View {
                        onSelect: model.selectInput)
             VSplitView {
                 VStack(spacing: 0) {
-                    SpectrumGraphView(mixPoints: model.mixPoints, guitarPoints: model.guitarPoints)
+                    SpectrumGraphView(mixPoints: model.mixPoints,
+                                      guitarPoints: model.guitarPoints,
+                                      differencePoints: model.differencePoints,
+                                      referencePoints: model.reference.map(GraphScale.points(of:)))
                     LevelsPanel(model: model)
                     ControlsBar(state: model.state,
                                scrubRangeSeconds: model.scrubRangeSeconds,
                                scrubSeconds: $model.scrubSeconds,
                                pinned: $model.pinned,
+                               showDifference: $model.showDifference,
                                timeConstant: $model.timeConstant,
                                onPause: model.pause,
                                onPlay: model.play,

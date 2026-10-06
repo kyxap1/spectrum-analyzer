@@ -23,10 +23,27 @@ struct GraphScaleTests {
         #expect(GraphScale.y(forDB: SpectrumAnalyzer.displayFloorDB, height: 500) == 500)
     }
 
-    @Test("frequency grid labels use k above 1 kHz")
+    @Test("grid labels follow the 10 octave bands, labelled as on the EQ2")
     func frequencyLabels() {
-        #expect(GraphScale.frequencyGridLines.map(GraphScale.frequencyLabel)
-            == ["20", "50", "100", "200", "500", "1k", "2k", "5k", "10k", "20k"])
+        #expect(GraphScale.frequencyGridLabels == ["31", "62", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"])
+        #expect(GraphScale.frequencyGridLines.count == GraphScale.frequencyGridLabels.count)
+    }
+
+    @Test("0 dB on the difference scale is mid-height, +/-30 dB the edges, beyond clamped")
+    func differenceScale() {
+        #expect(GraphScale.y(forDifferenceDB: 0, height: 500) == 250)
+        #expect(GraphScale.y(forDifferenceDB: 30, height: 500) == 0)
+        #expect(GraphScale.y(forDifferenceDB: -30, height: 500) == 500)
+        #expect(GraphScale.y(forDifferenceDB: 80, height: 500) == 0)
+        #expect(GraphScale.y(forDifferenceDB: -80, height: 500) == 500)
+    }
+
+    @Test("the difference curve is guitar minus mix per point")
+    func differenceCurve() {
+        let guitar = [SpectrumPoint(frequencyHz: 100, db: -20), SpectrumPoint(frequencyHz: 200, db: -30)]
+        let mix = [SpectrumPoint(frequencyHz: 100, db: -26), SpectrumPoint(frequencyHz: 200, db: -24)]
+        #expect(GraphScale.difference(guitar: guitar, mix: mix)
+            == [SpectrumPoint(frequencyHz: 100, db: 6), SpectrumPoint(frequencyHz: 200, db: -6)])
     }
 
     @Test("scrubber labels seconds as m:ss")

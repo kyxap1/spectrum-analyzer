@@ -11,6 +11,7 @@ struct ControlsBar: View {
     let scrubRangeSeconds: ClosedRange<Int>
     @Binding var scrubSeconds: Int
     @Binding var pinned: Bool
+    @Binding var showDifference: Bool
     @Binding var timeConstant: Double
 
     let onPause: () -> Void
@@ -30,6 +31,8 @@ struct ControlsBar: View {
                     .disabled(state == .live)
                 Button("Reset", action: onReset)
                 Spacer()
+                Toggle("Difference", isOn: $showDifference)
+                    .help("Show guitar minus mix on its own scale")
                 Toggle("Pin on Top", isOn: $pinned)
                 Picker("Smoothing", selection: $timeConstant) {
                     Text("1 s").tag(1.0)
