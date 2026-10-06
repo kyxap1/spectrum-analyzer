@@ -52,6 +52,7 @@ struct SpectrumGraphView: View {
     let guitarPoints: [SpectrumPoint]?
     var differencePoints: [SpectrumPoint]?
     var referencePoints: [SpectrumPoint]?
+    @Environment(\.displaySizes) private var sizes
 
     var body: some View {
         Canvas { context, size in
@@ -87,7 +88,7 @@ struct SpectrumGraphView: View {
                 Label("Guitar \u{2212} Mix", systemImage: "circle.dotted").foregroundStyle(.green)
             }
         }
-        .font(.caption)
+        .font(sizes.legend)
         .padding(8)
     }
 
@@ -108,13 +109,13 @@ struct SpectrumGraphView: View {
         // dB labels sit at the left edge, inside the canvas.
         let style = Color.white.opacity(0.5)
         for (hz, label) in zip(GraphScale.frequencyGridLines, GraphScale.frequencyGridLabels) {
-            context.draw(Text(label).font(.caption2).foregroundStyle(style),
+            context.draw(Text(label).font(sizes.axis).foregroundStyle(style),
                          at: CGPoint(x: GraphScale.x(forHz: hz, width: size.width), y: size.height - 2),
                          anchor: .bottom)
         }
         for db in GraphScale.dbGridLines {
             let y = GraphScale.y(forDB: db, height: size.height)
-            context.draw(Text("\(Int(db)) dB").font(.caption2).foregroundStyle(style),
+            context.draw(Text("\(Int(db)) dB").font(sizes.axis).foregroundStyle(style),
                          at: CGPoint(x: 6, y: y + 2),
                          anchor: .topLeading)
         }
@@ -123,7 +124,7 @@ struct SpectrumGraphView: View {
     private func drawDifferenceLabels(context: GraphicsContext, size: CGSize) {
         for db in GraphScale.differenceLabelValues {
             let y = GraphScale.y(forDifferenceDB: db, height: size.height)
-            context.draw(Text(String(format: "%+.0f", db)).font(.caption2).foregroundStyle(Color.green.opacity(0.7)),
+            context.draw(Text(String(format: "%+.0f", db)).font(sizes.axis).foregroundStyle(Color.green.opacity(0.7)),
                          at: CGPoint(x: size.width - 6, y: min(max(y, 8), size.height - 8)),
                          anchor: .trailing)
         }

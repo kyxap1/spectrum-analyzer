@@ -82,6 +82,7 @@ final class AppModel: ObservableObject {
         didSet { UserDefaults.standard.set(windowSeconds, forKey: "levels.windowSeconds") }
     }
     @Published var reference: Reference?
+    @Published var displayMode = false
     @Published var snapshots: [Snapshot] = []
     @Published var comparison: Comparison?
     /// The outcome of the last Set reference, shown next to its button.
@@ -111,6 +112,7 @@ final class AppModel: ObservableObject {
     private let mixLog = BandLog()
     private let guitarLog = BandLog()
     private let snapshotStore = SnapshotStore()
+    private var displayMemory = DisplayModeMemory(remembered: UserDefaults.standard.string(forKey: "display.screen"))
     /// The guitar log's sequence number when the reference was set or loaded;
     /// only hops logged since then count toward the comparison.
     private var referenceMark = 0
@@ -187,6 +189,22 @@ final class AppModel: ObservableObject {
         mixLog.reset()
         guitarLog.reset()
         referenceMark = guitarLog.nextSequence
+    }
+
+    /// By hand; the screen the window is on is remembered (KTD10).
+    func setDisplayMode(_ on: Bool) {
+        displayMemory.setOn(on)
+        syncDisplayMode()
+    }
+
+    func screenChanged(_ name: String?) {
+        displayMemory.screenChanged(to: name)
+        syncDisplayMode()
+    }
+
+    private func syncDisplayMode() {
+        displayMode = displayMemory.isOn
+        UserDefaults.standard.set(displayMemory.remembered, forKey: "display.screen")
     }
 
     private var windowHops: Int { Int(Double(windowSeconds) / Payload.hopSeconds) }
@@ -408,61 +426,128 @@ final class AppModel: ObservableObject {
 
 struct ContentView: View {
     @ObservedObject var model: AppModel
+    @State private var isShowingMore = false
 
     var body: some View {
         VStack(spacing: 0) {
             ForEach(model.banners) { banner in
                 BannerView(banner: banner)
             }
-            InputsPanel(devices: model.devices,
-                       selectedDeviceUID: model.selectedDeviceUID,
-                       ticks: model.ticks,
-                       failure: model.inputFailure,
-                       onSelect: model.selectInput)
-            VSplitView {
-                VStack(spacing: 0) {
-                    SpectrumGraphView(mixPoints: model.mixPoints,
-                                      guitarPoints: model.guitarPoints,
-                                      differencePoints: model.differencePoints,
-                                      referencePoints: model.reference.map(GraphScale.points(of:)))
-                    LevelsPanel(model: model)
-                    ControlsBar(state: model.state,
-                               scrubRangeSeconds: model.scrubRangeSeconds,
-                               scrubSeconds: $model.scrubSeconds,
-                               pinned: $model.pinned,
-                               showDifference: $model.showDifference,
-                               timeConstant: $model.timeConstant,
-                               onPause: model.pause,
-                               onPlay: model.play,
-                               onResumeLive: model.resumeLive,
-                               onScrub: model.scrub,
-                               onReset: model.reset)
-                }
-                .frame(minHeight: 220, idealHeight: 420)
-                AdvicePanel(state: model.adviceState,
-                           isAvailable: model.adviceAvailable,
-                           progress: model.adviceProgress,
-                           liveUsage: model.adviceLiveUsage,
-                           model: $model.adviceModel,
-                           profile: $model.adviceProfile,
-                           language: $model.adviceLanguage,
-                           goal: $model.adviceGoal,
-                           prompt: $model.advicePrompt,
-                           startingPositions: $model.startingPositions,
-                           fetchDomains: $model.adviceFetchDomains,
-                           pedals: model.rigPedals,
-                           engagedPedals: $model.engagedPedals,
-                           rigNotes: $model.rigNotes,
-                           isRefreshingRig: model.isRefreshingRig,
-                           onRefreshRig: model.refreshRig,
-                           previousRoundDate: model.previousRound?.date,
-                           onStartOver: model.startOver,
-                           onRequest: model.requestAdvice,
-                           onCancel: model.cancelAdvice)
-                    .frame(minHeight: 80, idealHeight: 360)
+            if model.displayMode {
+                displayLayout
+            } else {
+                normalLayout
             }
         }
         .frame(minWidth: 640, minHeight: 420)
+        .environment(\.displaySizes, model.displayMode ? .display : .normal)
+        .background(ScreenReader(onChange: model.screenChanged))
+        .sheet(isPresented: $isShowingMore) { moreSheet }
+    }
+
+    private var normalLayout: some View {
+        VStack(spacing: 0) {
+            inputsPanel
+            VSplitView {
+                VStack(spacing: 0) {
+                    graph
+                    LevelsPanel(model: model)
+                    controlsBar
+                }
+                .frame(minHeight: 220, idealHeight: 420)
+                advicePanel
+                    .frame(minHeight: 80, idealHeight: 360)
+            }
+        }
+    }
+
+    /// The graph, the meters and the touch row; everything else is in More.
+    private var displayLayout: some View {
+        VStack(spacing: 0) {
+            graph
+            LevelsPanel(model: model)
+            DisplayTouchRow(state: model.state,
+                            status: model.referenceStatus,
+                            onPause: model.pause,
+                            onResumeLive: model.resumeLive,
+                            onSetReference: model.setReference,
+                            onReset: model.reset,
+                            onMore: { isShowingMore = true })
+        }
+    }
+
+    private var moreSheet: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Spacer()
+                Button("Done") { isShowingMore = false }
+                    .keyboardShortcut(.defaultAction)
+                    .controlSize(.extraLarge)
+            }
+            .padding(8)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    inputsPanel
+                    controlsBar
+                    LevelsControls(model: model).padding(.horizontal, 8)
+                    advicePanel.frame(minHeight: 360)
+                }
+            }
+        }
+        .frame(minWidth: 720, minHeight: 600)
+    }
+
+    private var graph: some View {
+        SpectrumGraphView(mixPoints: model.mixPoints,
+                          guitarPoints: model.guitarPoints,
+                          differencePoints: model.differencePoints,
+                          referencePoints: model.reference.map(GraphScale.points(of:)))
+    }
+
+    private var inputsPanel: some View {
+        InputsPanel(devices: model.devices,
+                    selectedDeviceUID: model.selectedDeviceUID,
+                    ticks: model.ticks,
+                    failure: model.inputFailure,
+                    onSelect: model.selectInput)
+    }
+
+    private var controlsBar: some View {
+        ControlsBar(state: model.state,
+                    scrubRangeSeconds: model.scrubRangeSeconds,
+                    scrubSeconds: $model.scrubSeconds,
+                    pinned: $model.pinned,
+                    showDifference: $model.showDifference,
+                    displayMode: Binding(get: { model.displayMode }, set: { model.setDisplayMode($0) }),
+                    timeConstant: $model.timeConstant,
+                    onPause: model.pause,
+                    onPlay: model.play,
+                    onResumeLive: model.resumeLive,
+                    onScrub: model.scrub,
+                    onReset: model.reset)
+    }
+
+    private var advicePanel: some View {
+        AdvicePanel(state: model.adviceState,
+                    isAvailable: model.adviceAvailable,
+                    progress: model.adviceProgress,
+                    liveUsage: model.adviceLiveUsage,
+                    model: $model.adviceModel,
+                    profile: $model.adviceProfile,
+                    language: $model.adviceLanguage,
+                    goal: $model.adviceGoal,
+                    prompt: $model.advicePrompt,
+                    startingPositions: $model.startingPositions,
+                    fetchDomains: $model.adviceFetchDomains,
+                    pedals: model.rigPedals,
+                    engagedPedals: $model.engagedPedals,
+                    rigNotes: $model.rigNotes,
+                    isRefreshingRig: model.isRefreshingRig,
+                    onRefreshRig: model.refreshRig,
+                    previousRoundDate: model.previousRound?.date,
+                    onStartOver: model.startOver,
+                    onRequest: model.requestAdvice,
+                    onCancel: model.cancelAdvice)
     }
 }
 

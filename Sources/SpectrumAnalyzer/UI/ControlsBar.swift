@@ -12,6 +12,7 @@ struct ControlsBar: View {
     @Binding var scrubSeconds: Int
     @Binding var pinned: Bool
     @Binding var showDifference: Bool
+    @Binding var displayMode: Bool
     @Binding var timeConstant: Double
 
     let onPause: () -> Void
@@ -33,6 +34,8 @@ struct ControlsBar: View {
                 Spacer()
                 Toggle("Difference", isOn: $showDifference)
                     .help("Show guitar minus mix on its own scale")
+                Toggle("Display Mode", isOn: $displayMode)
+                    .help("Large type and touch targets for a tablet; remembered for this screen")
                 Toggle("Pin on Top", isOn: $pinned)
                 Picker("Smoothing", selection: $timeConstant) {
                     Text("1 s").tag(1.0)

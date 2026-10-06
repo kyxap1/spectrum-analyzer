@@ -1,10 +1,36 @@
 import SwiftUI
 
-/// Live RMS and peak for guitar and mix (R5), the activity thresholds, and
-/// Set reference with its live comparison (R7, R8), between the graph and the
-/// controls. The guitar meter reads unavailable while the interface is not
-/// captured.
+/// Live RMS and peak for guitar and mix (R5) and the live comparison against
+/// the reference (R8), between the graph and the controls. The controls
+/// (thresholds, Set reference, snapshots) follow in normal mode and move into
+/// the More sheet in display mode. The guitar meter reads unavailable while
+/// the interface is not captured.
 struct LevelsPanel: View {
+    @ObservedObject var model: AppModel
+    @Environment(\.displaySizes) private var sizes
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .top, spacing: sizes.isDisplayMode ? 48 : 24) {
+                MeterView(title: "Guitar", reading: model.guitarLevel)
+                MeterView(title: "Mix", reading: model.mixLevel)
+                Spacer()
+            }
+            if !sizes.isDisplayMode {
+                LevelsControls(model: model)
+            }
+            if model.reference != nil {
+                ComparisonView(comparison: model.comparison, windowSeconds: model.windowSeconds)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+    }
+}
+
+/// Thresholds with Learn noise, Set reference, the window length and the
+/// snapshots (R6, R7, R12, R13).
+struct LevelsControls: View {
     @ObservedObject var model: AppModel
     @State private var isNaming = false
     @State private var isShowingSnapshots = false
@@ -12,11 +38,6 @@ struct LevelsPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .top, spacing: 24) {
-                MeterView(title: "Guitar", reading: model.guitarLevel)
-                MeterView(title: "Mix", reading: model.mixLevel)
-                Spacer()
-            }
             HStack {
                 thresholdField("Guitar threshold", value: $model.guitarThresholdDBFS, source: .guitar)
                 thresholdField("Mix threshold", value: $model.mixThresholdDBFS, source: .mix)
@@ -40,12 +61,7 @@ struct LevelsPanel: View {
                 Text(model.referenceStatus).foregroundStyle(.secondary).lineLimit(1)
                 Spacer()
             }
-            if model.reference != nil {
-                ComparisonView(comparison: model.comparison, windowSeconds: model.windowSeconds)
-            }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
         .alert("Save reference as", isPresented: $isNaming) {
             TextField("Song \u{2014} part", text: $draftName)
             Button("Save") { model.saveSnapshot(name: draftName.trimmingCharacters(in: .whitespaces)) }
@@ -67,12 +83,56 @@ struct LevelsPanel: View {
     }
 }
 
+private struct MeterView: View {
+    let title: String
+    let reading: LevelReading?
+    @Environment(\.displaySizes) private var sizes
+
+    /// Bar spans -60 dBFS to 0 dBFS.
+    private static let floorDBFS: Float = -60
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 8) {
+                Text(title).font(sizes.label)
+                if let reading {
+                    Text("RMS \(LevelMeter.format(reading.rmsDBFS))").font(sizes.readout).monospacedDigit()
+                    Text("Peak \(LevelMeter.format(reading.peakDBFS)) dBFS").font(sizes.readout).monospacedDigit()
+                } else {
+                    Text("not captured").font(sizes.readout).foregroundStyle(.secondary)
+                }
+            }
+            bar(for: reading)
+        }
+    }
+
+    private func bar(for reading: LevelReading?) -> some View {
+        GeometryReader { geometry in
+            let fraction = reading.map { Self.fraction($0.rmsDBFS) } ?? 0
+            let peak = reading.map { Self.fraction($0.peakDBFS) } ?? 0
+            ZStack(alignment: .leading) {
+                Rectangle().fill(.quaternary)
+                Rectangle().fill(.tint).frame(width: geometry.size.width * fraction)
+                Rectangle().fill(.primary).frame(width: 2).offset(x: max(0, geometry.size.width * peak - 2))
+                    .opacity(reading == nil ? 0 : 1)
+            }
+        }
+        .frame(width: sizes.isDisplayMode ? 420 : 200, height: sizes.isDisplayMode ? 14 : 8)
+    }
+
+    private static func fraction(_ dBFS: Float) -> CGFloat {
+        guard dBFS.isFinite else { return 0 }
+        return CGFloat(min(max((dBFS - floorDBFS) / -floorDBFS, 0), 1))
+    }
+}
+
 /// The overall difference and the 10 octave-band differences, each as a
 /// signed number with a bar centred on 0 dB, marked partial until N active
 /// seconds have accumulated since the press.
 private struct ComparisonView: View {
     let comparison: Comparison?
     let windowSeconds: Int
+    @Environment(\.displaySizes) private var sizes
 
     /// Bars span +/-12 dB.
     private static let spanDB: Float = 12
@@ -80,23 +140,23 @@ private struct ComparisonView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack {
-                Text("Overall").font(.headline)
-                Text(Self.signed(comparison?.levelDifferenceDB) + " dB").monospacedDigit()
+                Text("Overall").font(sizes.label)
+                Text(Self.signed(comparison?.levelDifferenceDB) + " dB").font(sizes.readout).monospacedDigit()
                 if let comparison {
                     Text(String(format: "%.1f / %d s", comparison.activeSeconds, windowSeconds))
-                        .foregroundStyle(.secondary).monospacedDigit()
-                    if comparison.partial { Text("partial").foregroundStyle(.orange) }
+                        .font(sizes.label).foregroundStyle(.secondary).monospacedDigit()
+                    if comparison.partial { Text("partial").font(sizes.label).foregroundStyle(.orange) }
                 }
             }
             HStack(spacing: 6) {
                 ForEach(0..<OctaveBands.labels.count, id: \.self) { i in
                     let difference = comparison?.octaveDifferencesDB?[i]
                     VStack(spacing: 2) {
-                        Text(OctaveBands.labels[i]).font(.caption)
-                        Text(Self.signed(difference)).font(.caption).monospacedDigit()
+                        Text(OctaveBands.labels[i]).font(sizes.isDisplayMode ? sizes.axis : .caption)
+                        Text(Self.signed(difference)).font(sizes.isDisplayMode ? sizes.label : .caption).monospacedDigit()
                         CenteredBar(value: difference.map { CGFloat(min(max($0 / Self.spanDB, -1), 1)) })
                     }
-                    .frame(minWidth: 40)
+                    .frame(minWidth: sizes.isDisplayMode ? 100 : 40)
                 }
             }
         }
@@ -126,48 +186,6 @@ private struct CenteredBar: View {
             }
         }
         .frame(height: 8)
-    }
-}
-
-private struct MeterView: View {
-    let title: String
-    let reading: LevelReading?
-
-    /// Bar spans -60 dBFS to 0 dBFS.
-    private static let floorDBFS: Float = -60
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 8) {
-                Text(title).font(.headline)
-                if let reading {
-                    Text("RMS \(LevelMeter.format(reading.rmsDBFS))").monospacedDigit()
-                    Text("Peak \(LevelMeter.format(reading.peakDBFS)) dBFS").monospacedDigit()
-                } else {
-                    Text("not captured").foregroundStyle(.secondary)
-                }
-            }
-            bar(for: reading)
-        }
-    }
-
-    private func bar(for reading: LevelReading?) -> some View {
-        GeometryReader { geometry in
-            let fraction = reading.map { Self.fraction($0.rmsDBFS) } ?? 0
-            let peak = reading.map { Self.fraction($0.peakDBFS) } ?? 0
-            ZStack(alignment: .leading) {
-                Rectangle().fill(.quaternary)
-                Rectangle().fill(.tint).frame(width: geometry.size.width * fraction)
-                Rectangle().fill(.primary).frame(width: 2).offset(x: max(0, geometry.size.width * peak - 2))
-                    .opacity(reading == nil ? 0 : 1)
-            }
-        }
-        .frame(width: 200, height: 8)
-    }
-
-    private static func fraction(_ dBFS: Float) -> CGFloat {
-        guard dBFS.isFinite else { return 0 }
-        return CGFloat(min(max((dBFS - floorDBFS) / -floorDBFS, 0), 1))
     }
 }
 
