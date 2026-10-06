@@ -79,8 +79,8 @@ struct PayloadTests {
         writeSine(mixRing, frequency: 200, amplitudeDBFS: -6, seconds: seconds)
         writeSine(guitarRing, frequency: 800, amplitudeDBFS: -6, seconds: seconds)
 
-        let mix = Payload.analyze(ring: mixRing)
-        let guitar = Payload.analyze(ring: guitarRing)
+        let mix = Payload.analyze(ring: mixRing, thresholdDBFS: -70)
+        let guitar = Payload.analyze(ring: guitarRing, thresholdDBFS: -70)
         #expect(abs(mix.analyzedSeconds - seconds) < 0.001)
         #expect(abs(guitar.analyzedSeconds - seconds) < 0.001)
 
@@ -103,8 +103,8 @@ struct PayloadTests {
         let ringToneOnly = HistoryRing(capacity: Int(toneSeconds * Double(rate)))
         writeSine(ringToneOnly, frequency: 300, amplitudeDBFS: -6, seconds: toneSeconds)
 
-        let withTail = Payload.analyze(ring: ringWithTail)
-        let toneOnly = Payload.analyze(ring: ringToneOnly)
+        let withTail = Payload.analyze(ring: ringWithTail, thresholdDBFS: -70)
+        let toneOnly = Payload.analyze(ring: ringToneOnly, thresholdDBFS: -70)
 
         #expect(abs(withTail.analyzedSeconds - 120) < 0.001)
         #expect(withTail.analyzedSeconds == toneOnly.analyzedSeconds)
@@ -117,8 +117,8 @@ struct PayloadTests {
         writeSine(mixRing, frequency: 200, amplitudeDBFS: -6, seconds: 4)
         let guitarRing = HistoryRing(capacity: 4 * rate) // nothing written: empty kept range
 
-        let mix = Payload.analyze(ring: mixRing)
-        let guitar = Payload.analyze(ring: guitarRing)
+        let mix = Payload.analyze(ring: mixRing, thresholdDBFS: -70)
+        let guitar = Payload.analyze(ring: guitarRing, thresholdDBFS: -70)
         #expect(guitar.analyzedSeconds == 0)
 
         let text = Payload.render(mix: mix, guitar: guitar, rig: RigText(markdown: "rig", cachedAt: nil))
@@ -247,5 +247,72 @@ struct RigPedalsTests {
         #expect(payload.contains(table + "\n\nPrevious recommendation:\n" + previous.answer))
         #expect(payload.hasSuffix(previous.answer))
         #expect(!Payload.render(mix: bands, guitar: bands, rig: rig).contains("Previous round"))
+    }
+}
+
+@Suite("StartingPositions")
+struct StartingPositionsTests {
+    private let rig = RigText(markdown: "rig text", cachedAt: nil)
+    private let bands = SourceBands(power: [Float](repeating: 0.001, count: 31), analyzedSeconds: 4)
+
+    @Test("covers AE6: shipped defaults name the current rig and none of the removed pedals")
+    func shippedDefaultsMatchRig() {
+        let text = Payload.render(mix: bands, guitar: bands, rig: rig,
+                                  instruction: AdviceSettings.defaultPrompt,
+                                  startingPositions: AdviceSettings.defaultStartingPositions)
+        for removed in ["GE-7", "Matcha", "Bad Horse"] { #expect(!text.contains(removed)) }
+        for present in ["EQ2", "Timmy", "Fortin"] { #expect(text.contains(present)) }
+    }
+
+    @Test("covers AE6: the shipped prompt asks for whole-dB EQ2 changes")
+    func promptAsksWholeDB() {
+        #expect(AdviceSettings.defaultPrompt.contains("EQ2"))
+        #expect(AdviceSettings.defaultPrompt.contains("whole dB"))
+        #expect(!AdviceSettings.defaultPrompt.contains("2.5 dB"))
+    }
+
+    @Test("the shipped prompt carries no positions list")
+    func promptHasNoPositions() {
+        let prompt = AdviceSettings.defaultPrompt
+        #expect(!prompt.contains("Default positions"))
+        for name in ["Wampler", "Timmy", "Fortin", "Terraform", "Collider", "Plethora", "Spark", "Ravager"] {
+            #expect(!prompt.contains(name))
+        }
+    }
+
+    @Test("edited starting positions land under their heading after the rig state and before the previous round")
+    func editedPositionsAreRendered() {
+        let previous = AdviceRound(date: Date(timeIntervalSince1970: 1_700_000_000), bands: "table", answer: "answer")
+        let text = Payload.render(mix: bands, guitar: bands, rig: rig, rigState: "state",
+                                  startingPositions: "- **Amp** -- gain 3 o'clock.", previous: previous)
+        #expect(text.contains("state\n\nStarting positions:\n- **Amp** -- gain 3 o'clock.\n\nPrevious round ("))
+    }
+
+    @Test("an emptied starting-positions field adds no section")
+    func emptyPositionsAreOmitted() {
+        let text = Payload.render(mix: bands, guitar: bands, rig: rig, startingPositions: " \n")
+        #expect(!text.contains("Starting positions:"))
+    }
+
+    @Test("storing the default removes the key, a different value is stored and read back")
+    func storeRoundTrip() {
+        let key = "test.startingPositions.\(UUID().uuidString)"
+        defer { UserDefaults.standard.removeObject(forKey: key) }
+        AdviceSettings.store("custom", key, default: "default")
+        #expect(UserDefaults.standard.string(forKey: key) == "custom")
+        #expect(AdviceSettings.load(key, default: "default") == "custom")
+        AdviceSettings.store("default", key, default: "default")
+        #expect(UserDefaults.standard.object(forKey: key) == nil)
+    }
+}
+
+@Suite("PayloadThreshold")
+struct PayloadThresholdTests {
+    @Test("a threshold above the tone's RMS analyzes nothing, one below analyzes the tone's duration")
+    func thresholdGatesAnalysis() {
+        let ring = HistoryRing(capacity: 6 * rate)
+        writeSine(ring, frequency: 500, amplitudeDBFS: -20, seconds: 4)
+        #expect(Payload.analyze(ring: ring, thresholdDBFS: -10).analyzedSeconds == 0)
+        #expect(abs(Payload.analyze(ring: ring, thresholdDBFS: -30).analyzedSeconds - 4) < 0.001)
     }
 }

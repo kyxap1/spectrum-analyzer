@@ -23,6 +23,22 @@ you which one is missing and opens the right settings pane.
 brew upgrade --cask spectrum-analyzer
 ```
 
+## Local data export
+
+Off by default. Turn on **Local data export** in the levels panel and the app
+serves JSON (read-only for now) on the loopback interface, reachable only
+from the same Mac:
+
+```
+curl http://127.0.0.1:47800/levels
+```
+
+The document is versioned (`format`, `version`) and carries units and band
+centre frequencies. It holds the 31 third-octave band levels for guitar, mix
+and their difference over the last N active seconds, the RMS and peak levels,
+the reference and its differences when one is set, and the session state. Set
+the hidden `export.port` default to change the port.
+
 ## Development
 
 Requires Command Line Tools (`swift build`, `swift test`); Xcode is not

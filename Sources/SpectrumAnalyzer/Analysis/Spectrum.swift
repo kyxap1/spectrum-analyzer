@@ -98,14 +98,14 @@ final class SpectrumAnalyzer {
     /// `endFrame` and maps power onto the log-spaced display points.
     private func powerSpectrum(ring: HistoryRing, at endFrame: Int) -> [Float] {
         let (power, binHz) = fftPowerSpectrum(ring: ring, endFrame: endFrame, fftSize: Self.fftSize)
-        return mapToDisplayPoints(magnitudes: power, binHz: binHz)
+        return Self.mapToDisplayPoints(magnitudes: power, binHz: binHz)
     }
 
     /// Maps FFT bins onto the log-spaced display points by taking the loudest
     /// bin in each point's bucket.
-    private func mapToDisplayPoints(magnitudes: [Float], binHz: Double) -> [Float] {
+    static func mapToDisplayPoints(magnitudes: [Float], binHz: Double) -> [Float] {
         let nyquist = Double(HistoryRing.sampleRate) / 2
-        return frequencyBuckets(centerFrequencies: Self.displayFrequencies,
+        return frequencyBuckets(centerFrequencies: displayFrequencies,
                                 binHz: binHz,
                                 binCount: magnitudes.count,
                                 nyquist: nyquist)

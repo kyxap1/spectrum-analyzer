@@ -26,7 +26,7 @@ resources_dir="$contents/Resources"
 mkdir -p "$macos_dir" "$resources_dir"
 
 cp "$binary_path" "$macos_dir/SpectrumAnalyzer"
-cp Sources/SpectrumAnalyzer/Advice/prompt.md Sources/SpectrumAnalyzer/Advice/fetch-domains.txt "$resources_dir/"
+cp Sources/SpectrumAnalyzer/Advice/prompt.md Sources/SpectrumAnalyzer/Advice/starting-positions.md Sources/SpectrumAnalyzer/Advice/fetch-domains.txt "$resources_dir/"
 
 sed "s/__VERSION__/$version/g" Bundle/Info.plist > "$contents/Info.plist"
 
