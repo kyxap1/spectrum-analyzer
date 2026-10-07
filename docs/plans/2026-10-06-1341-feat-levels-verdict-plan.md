@@ -310,6 +310,23 @@ U1, U2 and U10 start independently. U1 comes first because it carries the CPU st
 
 All paths below are under `Sources/SpectrumAnalyzer/` and `Tests/SpectrumAnalyzerTests/`.
 
+### Progress and deviations
+
+U1-U5 are done on `feat/levels-verdict`, one commit each: `7e54616` U1, `49b2b8f` U2, `099380c` U3, `095f48a` U4, `78ac331` U5. All 181 tests pass. Steady Live CPU is 3.6% after U5 (R22 ≤5%); it was about 10.7% before U1. U6-U10 are not started. The shipping steps (simplify, then `ce-code-review` on the quick path) wait until the remaining units are done.
+
+How the implementation differs from the units below. Later units build on what the code does now, not on what the original text says:
+
+- **Mix always drawn (U1).** There is no Mix toggle, because guitar and mix always share one graph. Only derived values (differences, crest) may go to a separate pane. The transport row has Peak hold only.
+- **Difference pane (U1).** It shows Guitar − Reference and appears only while a reference is set. There is no Guitar − Mix pane.
+- **Scrubber and meters are AppKit views fed through `LiveSink` (U1).** A `@Published` change at 1 Hz or more re-lays out the whole window: the scrub position alone cost about 7% CPU. Any new value that changes once a second or faster goes through a `LiveSink` into an AppKit view, never through `@Published`.
+- **The verdict strip observes `LiveLevels.verdictText` (U5).** That published `VerdictText` changes only when a shown string changes. The strip never observes `Verdict`, which changes on every hop.
+- **The history strip is fed through `LiveLevels.history` (U5).** It is a `LiveSink<HistoryFrame>` that `AppModel.refreshComparison` fills.
+- **The clip latch is published as `LiveLevels.clipping` (U5).** `setMeters` updates it.
+- **Details shows octave differences, not third-octave differences (U5).** Each octave column also shows its crest difference. The loudness row adds the average peak difference and the crest difference.
+- **No ⚙ button yet (U5).** The thresholds with Learn noise, the window picker and the export toggle stay in `LevelsControls` inside Details. U7 adds the ⚙ button, moves these controls into `SettingsView` and removes `LevelsControls` from Details.
+- **`ReferenceMenu` lives in `UI/VerdictStrip.swift` (U5).** It holds Clear, Save as… and Snapshots…, with the reference status and errors. Both the strip and the display-mode More sheet use it, and `SnapshotsSheet` in `LevelsPanel.swift` is internal.
+- **Display mode still uses the old layout (left for U8).** It shows the graph, the meters with the comparison, and the touch row; the verdict strip and the history strip do not appear there yet. When U8 adds the strip to display mode, it must drop the strip's Set reference and Reference menu, as U8 says.
+
 ### U1. Layer-backed graph host
 
 - **Goal:** the graph draws as two panes from layers updated directly by the tick, and steady Live CPU is measured against R22.
