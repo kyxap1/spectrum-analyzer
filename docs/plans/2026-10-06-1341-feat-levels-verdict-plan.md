@@ -312,7 +312,7 @@ All paths below are under `Sources/SpectrumAnalyzer/` and `Tests/SpectrumAnalyze
 
 ### Progress and deviations
 
-U1-U5 are done on `feat/levels-verdict`, one commit each: `7e54616` U1, `49b2b8f` U2, `099380c` U3, `095f48a` U4, `78ac331` U5. All 181 tests pass. Steady Live CPU is 3.6% after U5 (R22 ≤5%); it was about 10.7% before U1. U6-U10 are not started. The shipping steps (simplify, then `ce-code-review` on the quick path) wait until the remaining units are done.
+U1-U5 are done on `feat/levels-verdict`, one commit each: `7e54616` U1, `49b2b8f` U2, `099380c` U3, `095f48a` U4, `78ac331` U5. All 181 tests pass. Steady Live CPU is 3.6% after U5 (R22 ≤5%); it was about 10.7% before U1. U6-U10 are not started and are blocked by the prerequisite below. The shipping steps (simplify, then `ce-code-review` on the quick path) wait until the remaining units are done.
 
 How the implementation differs from the units below. Later units build on what the code does now, not on what the original text says:
 
@@ -326,6 +326,48 @@ How the implementation differs from the units below. Later units build on what t
 - **No ⚙ button yet (U5).** The thresholds with Learn noise, the window picker and the export toggle stay in `LevelsControls` inside Details. U7 adds the ⚙ button, moves these controls into `SettingsView` and removes `LevelsControls` from Details.
 - **`ReferenceMenu` lives in `UI/VerdictStrip.swift` (U5).** It holds Clear, Save as… and Snapshots…, with the reference status and errors. Both the strip and the display-mode More sheet use it, and `SnapshotsSheet` in `LevelsPanel.swift` is internal.
 - **Display mode still uses the old layout (left for U8).** It shows the graph, the meters with the comparison, and the touch row; the verdict strip and the history strip do not appear there yet. When U8 adds the strip to display mode, it must drop the strip's Set reference and Reference menu, as U8 says.
+
+### Prerequisite before any further unit: rework the graphs
+
+**Status.** U1-U5 implement R11-R15, KTD8 and KTD11 as written, and the result is unreadable on a live signal. Do not start U6-U10 until this section is resolved with the user and the Product Contract and units below are revised to match.
+
+**Where the layout came from.** The committed seed `docs/plans/2026-10-06-render-performance-stub.md` ("Levels UI") put only three things on the first level: one verdict in words, the 10 octave bars with a one-line tone summary, and one primary Set button. Meters, peaks, average peak, crest and window progress went into Details. This plan then added two graph panes and a loudness history strip to the first level (R11, R14, R15). The user expected extra graphs to stay in Details until wanted. The first level shows them instead.
+
+**What the user saw.** The first level is a mash of graphs crammed into one big graph. The curves flatten against their limits and carry no meaning, labels are overlapped, and dots run along the bottom for no visible reason. The user cannot tell what to do with any of it. The defects behind this are listed below. The screenshot is from 2026-10-06, with the guitar from the MacBook microphone, the mix from YouTube, and a reference set from 7 s of microphone noise.
+
+1. **The spectrum pane is mostly empty.** KTD8 fixes it at 0 to −80 dB with a −100 dB floor. A real input at −60 to −90 dB sits in the bottom third, and above 1 kHz the guitar lies flat on the floor.
+2. **The mix curve reads as a pane divider.** At the floor it is a flat orange line on the boundary between the panes, while the legend still lists Mix.
+3. **Peak hold and Reference cannot be told apart.** Both are dark teal shadows behind the guitar, and their legend colours are almost the same.
+4. **The difference pane is clamped.** KTD8 clamps it at ±12 dB, so the curve runs off the bottom at 125 Hz and 250 Hz and lies as a flat shelf above 4 kHz. Where both signals are at the floor, the curve probably shows only the loudness offset, not tone; this is unverified. The pane is meant to be read through U6's columns and numbers, which do not exist yet, so a bare curve is all it shows.
+5. **Labels sit under the curves.** Curves cross the axis labels (−80 dB, +6, 125, 250), and the "Guitar − Reference" legend sits on its own line.
+6. **The history strip is unreadable.** It is a light grey band of 2 pt dots with no labels and no legend, placed directly under the frequency axis, so it reads as another frequency plot although its x axis is time. KTD11 fixed the axes; the dot style and the missing labels are the implementer's choice.
+7. **The verdict reads as advice it cannot back up.** "quieter → turn up −8 dB", "dynamics opened up by 6 dB" and "Tone: 9 bands" were computed against a partial reference taken from noise. Nothing on screen says the reference is unfit.
+8. **Visual verification was too shallow.** The render was checked only for block order, never judged for readability. Flat, clamped curves were already visible after U1 and were never raised with the user.
+
+**What the rework must deliver.** These are the user's demands plus the fixes for the defects above:
+
+- **First level.** It shows the verdict strip and the spectrum graph, with guitar and mix always together on one graph (memory rule). Anything else on the first level needs the user's explicit approval of a sketch first.
+- **Extra graphs.** The difference pane and the loudness history strip move into collapsed Details, or are dropped. The user decides which.
+- **No curve flattened at a scale limit.** The spectrum scale must fit the actual signal, for example a range that follows the signal with hold, or a floor tied to the threshold. A curve below the threshold or noise floor is not drawn, and neither is a difference where the guitar or the reference is below threshold.
+- **Labels never under curves.** Axis labels go in gutters outside the plot area. The legend goes outside the plot or in a reserved corner with a background.
+- **Every graph says what it shows.** It has a title or axis units. A time-based strip has time labels and is visually separated from any frequency axis.
+- **Distinct colours.** Each curve has its own colour, and the colours match one theme (no light grey band beside a dark graph).
+- **Silence instead of noise advice.** The verdict says the reference is unfit, rather than giving advice, when the reference or the live window is mostly below threshold.
+- **Visual checks judge readability.** They are done on a live signal with the in-app render, and every pane must answer "what does this tell the user to do". A plan-specified scale that yields flat or clamped curves is a stop: raise it with the user, do not implement around it.
+
+**Order of work for the next session.**
+
+1. With the user, revise R11-R16, R18, KTD7 (the history-strip part), KTD8 and KTD11, and units U5 (layout), U6 and U8. Use `ce-brainstorm` or a direct plan edit, and get the user's approval of a layout sketch before writing code.
+2. Rework `GraphLayerView`, `SpectrumGraph`, `HistoryStrip` and the layout in `ContentView` to match. Keep U2-U4's analysis code and U1's AppKit/`LiveSink` drawing path, which brought CPU down from about 10.7% to 3.6%.
+3. Verify with the live render and a re-measured CPU, then show the user before moving on to U6.
+
+**Local verification tooling.** These files are untracked and are never committed. If `Sources/SpectrumAnalyzer/_CctmpDebug.swift` is present, add `CctmpDebug.install(model: self)` at the end of `AppModel.init` and remove that line before each commit. The signals then do the following:
+
+- `SIGUSR1` renders the window to `_cctmp.window.png`.
+- `SIGUSR2` presses Set reference.
+- `SIGINFO` toggles Peak hold.
+
+The user does not take screenshots and does not grant the terminal Screen Recording.
 
 ### U1. Layer-backed graph host
 
