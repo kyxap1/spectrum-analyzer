@@ -45,6 +45,15 @@ struct VerdictTextTests {
         #expect(filling.tone == nil)
     }
 
+    @Test("a reference shorter than its window gives no advice, only a request to set it again (R25)")
+    func referenceTooShort() {
+        let text = VerdictText(nil, referenceTooShort: true)
+        #expect(text.direction == "Reference too short \u{2014} set it again")
+        #expect(text.detail == nil)
+        #expect(text.tone == nil)
+        #expect(text.crest == nil)
+    }
+
     @Test("the crest line reads squashed for a negative change and stays empty at zero")
     func crest() {
         #expect(VerdictText(verdict(crest: -2)).crest == "dynamics squashed by 4 dB")

@@ -108,10 +108,10 @@ final class BandLog {
     }
 
     /// The newest `limit` hops at or above `threshold`, optionally only those
-    /// logged at or after sequence `since`.
-    func window(threshold: Float, limit: Int, since: Int = 0) -> ActiveWindow {
+    /// logged at or after sequence `since` and ending at or before frame `upTo`.
+    func window(threshold: Float, limit: Int, since: Int = 0, upTo: Int = .max) -> ActiveWindow {
         var picked: [LogHop] = []
-        for hop in hops.reversed() {
+        for hop in hops.reversed() where hop.endFrame <= upTo {
             if hop.sequence < since { break }
             if hop.rmsDBFS >= threshold {
                 picked.append(hop)

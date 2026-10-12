@@ -1,14 +1,15 @@
 import AppKit
 import SwiftUI
 
-/// The guitar and the mix on one spectrum pane; with a reference, the
-/// difference pane below it shares the frequency axis (R11-R13). Core Animation layers draw it and the tick feeds them through
-/// `sink`, so the 30 Hz path never touches SwiftUI state (KTD7).
+/// The spectrum graph with its tone row (R8, R11, R12), or the difference pane
+/// (R13), from the same frames. Core Animation layers draw it and the tick
+/// feeds them through `sink`, so the 30 Hz path never touches SwiftUI state (KTD7).
 struct SpectrumGraphView: NSViewRepresentable {
     let sink: LiveSink<GraphFrame>
+    var kind = GraphLayerView.Kind.spectrum
 
     func makeNSView(context: Context) -> GraphLayerView {
-        let view = GraphLayerView()
+        let view = GraphLayerView(kind: kind)
         view.sizes = context.environment.displaySizes
         sink.attach(view) { view, frame in view.show(frame) }
         return view
@@ -19,42 +20,59 @@ struct SpectrumGraphView: NSViewRepresentable {
     }
 }
 
+/// Labels, title and legend sit in gutters around the plot, never under a
+/// curve. They are rebuilt only when what they show changes, not every frame.
 final class GraphLayerView: NSView {
+    enum Kind { case spectrum, difference }
+
     var sizes = DisplaySizes.normal {
         didSet { if sizes.isDisplayMode != oldValue.isDisplayMode { needsLayout = true } }
     }
 
+    private let kind: Kind
     private var graphFrame = GraphFrame()
     private let gridLayer = CAShapeLayer()
     private let axisLayer = CAShapeLayer()
     private let corridorLayer = CAShapeLayer()
     private let peakHoldLayer = CAShapeLayer()
     private let mixLayer = CAShapeLayer()
+    private let mixEdgeLayer = CAShapeLayer()
     private let guitarLayer = CAShapeLayer()
     private let differenceLayer = CAShapeLayer()
-    private let legendLayer = CATextLayer()
-    private let differenceLegendLayer = CATextLayer()
-    private var labelLayers: [CATextLayer] = []
-    private var legendKey = ""
+    private var textLayers: [CATextLayer] = []
+    private var chromeKey = ""
 
+    /// KTD9: the graphs follow the system's light or dark appearance on the
+    /// window's own background, one colour per curve.
+    static let background = NSColor.windowBackgroundColor
+    static let guitarColor = adaptive(light: 0x0091C2, dark: 0x2CC6EA)
+    /// Grey, so the peaks never read as a second guitar curve.
+    static let peakHoldColor = NSColor.secondaryLabelColor
+    static let mixColor = adaptive(light: 0xE08600, dark: 0xF5A623)
+    /// Faint enough to stay orange, not brown, under its edge.
+    static let mixFillColor = mixColor.withAlphaComponent(0.22)
+    static let referenceColor = adaptive(light: 0x8A5CF0, dark: 0xB18CFF)
+    static let differenceColor = adaptive(light: 0xB88A00, dark: 0xFFD166)
+    static let gridColor = NSColor.labelColor.withAlphaComponent(0.1)
+    static let frameColor = NSColor.labelColor.withAlphaComponent(0.2)
+    static let labelColor = NSColor.secondaryLabelColor
+    static let titleColor = NSColor.labelColor
     /// A shaded band thinner than this reads as a line (KTD9).
     private static let minCorridorThickness = 4.0
-    private static let labelColor = NSColor.white.withAlphaComponent(0.5)
 
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
+    init(kind: Kind) {
+        self.kind = kind
+        super.init(frame: .zero)
         wantsLayer = true
-        layer?.backgroundColor = NSColor.black.withAlphaComponent(0.85).cgColor
-        stroke(gridLayer, NSColor.white.withAlphaComponent(0.15), width: 1)
-        stroke(axisLayer, NSColor.white.withAlphaComponent(0.35), width: 1)
-        corridorLayer.fillColor = NSColor.systemCyan.withAlphaComponent(0.25).cgColor
-        stroke(peakHoldLayer, NSColor.systemCyan.withAlphaComponent(0.4), width: 1)
-        stroke(mixLayer, .systemOrange, width: 1.5)
-        stroke(guitarLayer, .systemCyan, width: 1.5)
-        stroke(differenceLayer, .systemGreen, width: 1.5)
-        for text in [legendLayer, differenceLegendLayer] { text.alignmentMode = .right }
-        for sublayer in [gridLayer, axisLayer, corridorLayer, peakHoldLayer, mixLayer, guitarLayer, differenceLayer,
-                         legendLayer, differenceLegendLayer] {
+        for shape in [gridLayer, axisLayer, peakHoldLayer, mixEdgeLayer] { shape.lineWidth = 1 }
+        for shape in [guitarLayer, differenceLayer] { shape.lineWidth = 1.5 }
+        for shape in [gridLayer, axisLayer, peakHoldLayer, mixEdgeLayer, guitarLayer, differenceLayer] {
+            shape.fillColor = nil
+            shape.lineJoin = .round
+        }
+        applyColors()
+        for sublayer in [gridLayer, axisLayer, mixLayer, mixEdgeLayer, corridorLayer, peakHoldLayer, guitarLayer, differenceLayer] {
+            sublayer.masksToBounds = false
             layer?.addSublayer(sublayer)
         }
     }
@@ -63,73 +81,148 @@ final class GraphLayerView: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
     func show(_ frame: GraphFrame) {
-        let paneChanged = (frame.reference != nil) != (graphFrame.reference != nil)
         graphFrame = frame
-        if paneChanged {
-            legendKey = ""
-            drawGrid()
-        }
+        drawChromeIfChanged()
         drawCurves()
-    }
-
-    private var panes: (spectrum: GraphPane, difference: GraphPane) {
-        GraphScale.panes(height: bounds.height, withDifference: graphFrame.reference != nil)
     }
 
     override func layout() {
         super.layout()
-        legendKey = ""
-        drawGrid()
+        chromeKey = ""
+        drawChromeIfChanged()
         drawCurves()
+    }
+
+    /// Layers keep plain CGColors, so a switch between light and dark resolves them again.
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyColors()
+        chromeKey = ""
+        drawChromeIfChanged()
+    }
+
+    private func applyColors() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = Self.background.cgColor
+            gridLayer.strokeColor = Self.gridColor.cgColor
+            axisLayer.strokeColor = Self.frameColor.cgColor
+            corridorLayer.fillColor = Self.referenceColor.withAlphaComponent(0.35).cgColor
+            peakHoldLayer.strokeColor = Self.peakHoldColor.cgColor
+            mixLayer.fillColor = Self.mixFillColor.cgColor
+            mixEdgeLayer.strokeColor = Self.mixColor.cgColor
+            guitarLayer.strokeColor = Self.guitarColor.cgColor
+            differenceLayer.strokeColor = Self.differenceColor.cgColor
+        }
+    }
+
+    /// The light or the dark shade, whichever the appearance asks for.
+    private static func adaptive(light: Int, dark: Int) -> NSColor {
+        let color = { (rgb: Int) in
+            NSColor(srgbRed: CGFloat(rgb >> 16 & 0xFF) / 255, green: CGFloat(rgb >> 8 & 0xFF) / 255,
+                    blue: CGFloat(rgb & 0xFF) / 255, alpha: 1)
+        }
+        return NSColor(name: nil) { $0.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? color(dark) : color(light) }
     }
 
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
         let scale = window?.backingScaleFactor ?? 2
-        for text in labelLayers + [legendLayer, differenceLegendLayer] { text.contentsScale = scale }
+        for text in textLayers { text.contentsScale = scale }
     }
 
-    private func stroke(_ shape: CAShapeLayer, _ color: NSColor, width: CGFloat) {
-        shape.strokeColor = color.cgColor
-        shape.fillColor = nil
-        shape.lineWidth = width
-    }
+    // MARK: Geometry. Everything is top-down; the layers are bottom-up.
 
-    // MARK: Geometry. GraphScale is top-down; the layers are bottom-up.
+    private var axisFont: NSFont { sizes.axisNSFont }
+    private var legendFont: NSFont { sizes.legendNSFont }
+
+    private func lineHeight(_ font: NSFont) -> Double { ceil(font.ascender - font.descender + font.leading) }
+
+    /// The plot inside the gutters: header on top, dB labels left, Hz labels
+    /// and, for the spectrum, the tone row below.
+    private var plot: CGRect {
+        let left = sizes.plotLeft
+        let top = lineHeight(legendFont) + 6
+        var bottom = lineHeight(axisFont) + 4
+        if kind == .spectrum { bottom += lineHeight(legendFont) + 4 }
+        return CGRect(x: left, y: top, width: max(1, bounds.width - left - 10), height: max(1, bounds.height - top - bottom))
+    }
 
     private func point(x: Double, top y: Double) -> CGPoint {
         CGPoint(x: x, y: bounds.height - y)
     }
 
-    private func curvePath(_ points: [SpectrumPoint], y: (Float) -> Double) -> CGPath {
+    private var range: ClosedRange<Float> {
+        kind == .spectrum ? GraphScale.spectrumRange : GraphScale.differenceRange
+    }
+
+    private func plotX(_ hz: Double, _ plot: CGRect) -> Double { plot.minX + GraphScale.x(forHz: hz, width: plot.width) }
+
+    private func plotY(_ db: Float, _ plot: CGRect) -> Double? {
+        GraphScale.y(forDB: db, range: range, height: plot.height).map { plot.minY + $0 }
+    }
+
+    /// A point outside the range lies on its edge, as Friture clips it; only a
+    /// point with no value breaks the line.
+    private func curvePath(_ points: [SpectrumPoint], _ plot: CGRect) -> CGPath {
         let path = CGMutablePath()
-        for (i, p) in points.enumerated() {
-            let location = point(x: GraphScale.x(forHz: p.frequencyHz, width: bounds.width), top: y(p.db))
-            if i == 0 { path.move(to: location) } else { path.addLine(to: location) }
+        var drawing = false
+        for p in points {
+            guard let y = plotY(p.db, plot) else {
+                drawing = false
+                continue
+            }
+            let location = point(x: plotX(p.frequencyHz, plot), top: y)
+            if drawing { path.addLine(to: location) } else { path.move(to: location) }
+            drawing = true
         }
         return path
     }
 
-    private func corridorPath(_ frame: GraphFrame, pane: GraphPane) -> CGPath? {
-        guard let reference = frame.reference else { return nil }
-        let corridor = GraphScale.corridor(reference: reference, offsetDB: frame.referenceOffsetDB, stepDB: frame.toneStepDB)
+    /// Friture's filled spectrum: the area from the plot's bottom up to the curve.
+    private func fillPath(_ points: [SpectrumPoint], _ plot: CGRect) -> CGPath? {
+        guard let first = points.first, let last = points.last else { return nil }
+        let path = CGMutablePath()
+        path.move(to: point(x: plotX(first.frequencyHz, plot), top: plot.maxY))
+        for p in points {
+            path.addLine(to: point(x: plotX(p.frequencyHz, plot), top: plotY(p.db, plot) ?? plot.maxY))
+        }
+        path.addLine(to: point(x: plotX(last.frequencyHz, plot), top: plot.maxY))
+        path.closeSubpath()
+        return path
+    }
+
+    /// One filled band per run of reference points whose upper edge is inside the range.
+    private func corridorPath(_ frame: GraphFrame, _ plot: CGRect) -> CGPath? {
+        guard let reference = frame.drawnReference else { return nil }
+        let path = CGMutablePath()
         var upper: [CGPoint] = []
         var lower: [CGPoint] = []
-        for (high, low) in zip(corridor.upper, corridor.lower) {
-            let x = GraphScale.x(forHz: high.frequencyHz, width: bounds.width)
-            var top = GraphScale.y(forDB: high.db, in: pane)
-            var bottom = GraphScale.y(forDB: low.db, in: pane)
+        func closeRun() {
+            if upper.count > 1 {
+                path.addLines(between: upper + lower.reversed())
+                path.closeSubpath()
+            }
+            upper = []
+            lower = []
+        }
+        for p in reference {
+            guard p.db + frame.toneStepDB >= GraphScale.spectrumRange.lowerBound,
+                  let high = plotY(p.db + frame.toneStepDB, plot) else {
+                closeRun()
+                continue
+            }
+            var top = high
+            var bottom = plotY(p.db - frame.toneStepDB, plot) ?? plot.maxY
             if bottom - top < Self.minCorridorThickness {
                 let middle = (top + bottom) / 2
                 top = middle - Self.minCorridorThickness / 2
                 bottom = middle + Self.minCorridorThickness / 2
             }
+            let x = plotX(p.frequencyHz, plot)
             upper.append(point(x: x, top: top))
             lower.append(point(x: x, top: bottom))
         }
-        let path = CGMutablePath()
-        path.addLines(between: upper + lower.reversed())
-        path.closeSubpath()
+        closeRun()
         return path
     }
 
@@ -137,112 +230,150 @@ final class GraphLayerView: NSView {
 
     private func drawCurves() {
         let frame = graphFrame
-        let panes = panes
-        let spectrumY = { (db: Float) in GraphScale.y(forDB: db, in: panes.spectrum) }
+        let plot = plot
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        corridorLayer.path = corridorPath(frame, pane: panes.spectrum)
-        peakHoldLayer.path = frame.peakHold.map { curvePath($0, y: spectrumY) }
-        mixLayer.path = curvePath(frame.mix, y: spectrumY)
-        guitarLayer.path = frame.guitar.map { curvePath($0, y: spectrumY) }
-        differenceLayer.path = frame.difference.map { curvePath($0) { GraphScale.y(forDifferenceDB: $0, in: panes.difference) } }
-        updateLegends(frame, panes: panes)
+        switch kind {
+        case .spectrum:
+            corridorLayer.path = corridorPath(frame, plot)
+            peakHoldLayer.path = frame.peakHold.map { curvePath($0, plot) }
+            mixLayer.path = fillPath(frame.mix, plot)
+            mixEdgeLayer.path = curvePath(frame.mix, plot)
+            guitarLayer.path = frame.guitar.map { curvePath($0, plot) }
+        case .difference:
+            differenceLayer.path = frame.difference.map { curvePath($0, plot) }
+        }
         CATransaction.commit()
     }
 
-    /// Rebuilt only when what they name changes, not every frame.
-    private func updateLegends(_ frame: GraphFrame, panes: (spectrum: GraphPane, difference: GraphPane)) {
-        var entries: [(String, NSColor)] = [("Mix", .systemOrange)]
-        if frame.guitar != nil { entries.append(("Guitar", .systemCyan)) }
-        if frame.reference != nil { entries.append(("Reference", NSColor.systemCyan.withAlphaComponent(0.6))) }
-        if frame.peakHold != nil { entries.append(("Peak hold", NSColor.systemCyan.withAlphaComponent(0.4))) }
-        let differenceTitle = frame.difference == nil ? "" : "Guitar \u{2212} Reference"
-        let key = entries.map(\.0).joined(separator: "|") + "#" + differenceTitle
-        guard key != legendKey else { return }
-        legendKey = key
-
-        let font = sizes.legendNSFont
-        let legend = NSMutableAttributedString()
-        for (i, entry) in entries.enumerated() {
-            legend.append(NSAttributedString(string: (i == 0 ? "" : "\n") + entry.0,
-                                             attributes: [.font: font, .foregroundColor: entry.1]))
+    private var legendEntries: [(String, NSColor)] {
+        let frame = graphFrame
+        switch kind {
+        case .spectrum:
+            var entries: [(String, NSColor)] = []
+            if frame.guitar != nil { entries.append(("\u{2014} Guitar", Self.guitarColor)) }
+            entries.append(("\u{25AC} Mix", Self.mixColor))
+            if frame.reference != nil { entries.append(("\u{25AC} Reference", Self.referenceColor)) }
+            if frame.peakHold != nil { entries.append(("\u{2014} Peak hold", Self.peakHoldColor)) }
+            return entries
+        case .difference:
+            return [("\u{2014} Guitar \u{2212} Reference", Self.differenceColor)]
         }
-        place(legendLayer, legend, topRight: CGPoint(x: bounds.width - 8, y: panes.spectrum.top + 6))
-        place(differenceLegendLayer,
-              NSAttributedString(string: differenceTitle, attributes: [.font: font, .foregroundColor: NSColor.systemGreen]),
-              topRight: CGPoint(x: bounds.width - 8, y: panes.difference.top + 4))
     }
 
-    private func place(_ text: CATextLayer, _ string: NSAttributedString, topRight: CGPoint) {
-        let size = string.size()
-        text.string = string
-        let origin = point(x: topRight.x - ceil(size.width), top: topRight.y + ceil(size.height))
-        text.frame = CGRect(x: origin.x, y: origin.y, width: ceil(size.width), height: ceil(size.height))
+    /// The signed figure of each octave out by a step; blank within tolerance (R8).
+    private var toneTexts: [String] {
+        guard kind == .spectrum, graphFrame.reference != nil, let steps = graphFrame.toneSteps else { return [] }
+        return steps.map { $0 == 0 ? "" : Self.signed(Float($0) * graphFrame.toneStepDB) }
     }
 
-    private func drawGrid() {
-        let panes = panes
-        let width = bounds.width
+    private static func signed(_ db: Float) -> String {
+        db == 0 ? "0" : (db < 0 ? "\u{2212}" : "+") + String(format: "%.0f", abs(db))
+    }
+
+    private func drawChromeIfChanged() {
+        let key = "\(bounds.size)|\(sizes.isDisplayMode)|\(range)|\(graphFrame.reference != nil)|\(graphFrame.windowSeconds ?? 0)|"
+            + legendEntries.map(\.0).joined(separator: ",") + "|" + toneTexts.joined(separator: ",")
+        guard key != chromeKey else { return }
+        chromeKey = key
+        let plot = plot
+
         let grid = CGMutablePath()
-        for hz in GraphScale.frequencyGridLines {
-            let x = GraphScale.x(forHz: hz, width: width)
-            grid.move(to: point(x: x, top: 0))
-            grid.addLine(to: point(x: x, top: bounds.height))
-        }
-        for db in GraphScale.dbGridLines {
-            let y = GraphScale.y(forDB: db, in: panes.spectrum)
-            grid.move(to: point(x: 0, top: y))
-            grid.addLine(to: point(x: width, top: y))
-        }
         let axis = CGMutablePath()
-        let differenceLines = panes.difference.height > 0 ? GraphScale.differenceGridLines : []
-        if !differenceLines.isEmpty {
-            axis.move(to: point(x: 0, top: panes.difference.top))
-            axis.addLine(to: point(x: width, top: panes.difference.top))
+        for hz in GraphScale.frequencyGridLines {
+            let x = plotX(hz, plot)
+            grid.move(to: point(x: x, top: plot.minY))
+            grid.addLine(to: point(x: x, top: plot.maxY))
         }
-        for db in differenceLines {
-            let y = GraphScale.y(forDifferenceDB: db, in: panes.difference)
-            let path = db == 0 ? axis : grid
-            path.move(to: point(x: 0, top: y))
-            path.addLine(to: point(x: width, top: y))
+        let step = kind == .spectrum ? GraphScale.spectrumGridStepDB : GraphScale.differenceGridStepDB
+        let dbLines = GraphScale.gridLines(range: range, step: step)
+        for db in dbLines {
+            guard let y = plotY(db, plot) else { continue }
+            let path = kind == .difference && db == 0 ? axis : grid
+            path.move(to: point(x: plot.minX, top: y))
+            path.addLine(to: point(x: plot.maxX, top: y))
         }
+        axis.addRect(CGRect(x: plot.minX, y: bounds.height - plot.maxY, width: plot.width, height: plot.height))
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         gridLayer.path = grid
         axisLayer.path = axis
-        for text in labelLayers { text.removeFromSuperlayer() }
-        labelLayers = []
-        let font = sizes.axisNSFont
+        for text in textLayers { text.removeFromSuperlayer() }
+        textLayers = []
+
+        // Header: title left, legend right.
+        let window = graphFrame.windowSeconds.map { ", last \($0) s of playing" } ?? ""
+        let title = (kind == .spectrum ? "PSD, dB" : "Guitar \u{2212} Reference, dB (level-matched)") + window
+        addText(NSAttributedString(string: title, attributes: [.font: legendFont, .foregroundColor: Self.titleColor]),
+                left: plot.minX, top: 3)
+        let legend = NSMutableAttributedString()
+        for (i, entry) in legendEntries.enumerated() {
+            legend.append(NSAttributedString(string: (i == 0 ? "" : "    ") + entry.0,
+                                             attributes: [.font: legendFont, .foregroundColor: entry.1]))
+        }
+        addText(legend, right: plot.maxX, top: 3)
+
+        // dB labels in the left gutter, centred on their lines.
+        let labelYs = dbLines.map { plotY($0, plot) ?? plot.maxY }
+        for i in GraphScale.fittingLabels(labelYs, labelHeight: lineHeight(axisFont)) {
+            let db = dbLines[i]
+            let string = kind == .spectrum ? Self.signed(db).replacingOccurrences(of: "+", with: "") : Self.signed(db)
+            addLabel(string, font: axisFont, right: plot.minX - 4, centerY: labelYs[i])
+        }
+        // Hz labels under the plot.
         for (hz, label) in zip(GraphScale.frequencyGridLines, GraphScale.frequencyGridLabels) {
-            addLabel(label, font: font, centerX: GraphScale.x(forHz: hz, width: width), bottom: bounds.height - 2)
+            addLabel(label, font: axisFont, centerX: plotX(hz, plot), top: plot.maxY + 2)
         }
-        for db in GraphScale.dbGridLines {
-            addLabel("\(Int(db)) dB", font: font, left: 6, top: GraphScale.y(forDB: db, in: panes.spectrum) + 2)
-        }
-        // Above their lines, clear of the frequency labels at the bottom.
-        for db in differenceLines {
-            let text = db == 0 ? "0" : String(format: "%+.0f", db).replacingOccurrences(of: "-", with: "\u{2212}")
-            let height = (text as NSString).size(withAttributes: [.font: font]).height
-            addLabel(text, font: font, left: 6, top: GraphScale.y(forDifferenceDB: db, in: panes.difference) - height - 1)
+        // The tone row under the Hz labels (R8).
+        if kind == .spectrum, graphFrame.reference != nil {
+            let rowTop = plot.maxY + lineHeight(axisFont) + 5
+            addText(NSAttributedString(string: "vs ref", attributes: [.font: legendFont, .foregroundColor: Self.labelColor]),
+                    right: plot.minX - 4, top: rowTop)
+            let font = NSFont.monospacedDigitSystemFont(ofSize: legendFont.pointSize, weight: .semibold)
+            for (hz, text) in zip(GraphScale.frequencyGridLines, toneTexts) where !text.isEmpty {
+                let string = NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: Self.titleColor])
+                addText(string, left: plotX(hz, plot) - string.size().width / 2, top: rowTop)
+            }
         }
         CATransaction.commit()
     }
 
-    private func addLabel(_ string: String, font: NSFont, centerX: Double, bottom: Double) {
-        let size = (string as NSString).size(withAttributes: [.font: font])
-        addLabel(string, font: font, left: centerX - size.width / 2, top: bottom - size.height)
+    private func addLabel(_ string: String, font: NSFont, right: Double, centerY: Double) {
+        let attributed = NSAttributedString(string: string, attributes: [.font: font, .foregroundColor: Self.labelColor])
+        addText(attributed, right: right, top: centerY - attributed.size().height / 2)
     }
 
-    private func addLabel(_ string: String, font: NSFont, left: Double, top: Double) {
-        let text = CATextLayer()
+    private func addLabel(_ string: String, font: NSFont, centerX: Double, top: Double) {
         let attributed = NSAttributedString(string: string, attributes: [.font: font, .foregroundColor: Self.labelColor])
-        let size = attributed.size()
-        text.string = attributed
+        addText(attributed, left: centerX - attributed.size().width / 2, top: top)
+    }
+
+    private func addText(_ string: NSAttributedString, right: Double, top: Double) {
+        addText(string, left: right - ceil(string.size().width), top: top)
+    }
+
+    private func addText(_ string: NSAttributedString, left: Double, top: Double) {
+        let size = string.size()
+        let text = CATextLayer()
+        text.string = resolved(string)
         text.contentsScale = window?.backingScaleFactor ?? 2
         let origin = point(x: left, top: top + ceil(size.height))
         text.frame = CGRect(x: origin.x, y: origin.y, width: ceil(size.width), height: ceil(size.height))
-        layer?.insertSublayer(text, above: axisLayer)
-        labelLayers.append(text)
+        layer?.addSublayer(text)
+        textLayers.append(text)
+    }
+
+    /// A text layer draws without the view's appearance, so its colours are fixed here.
+    private func resolved(_ string: NSAttributedString) -> NSAttributedString {
+        let copy = NSMutableAttributedString(attributedString: string)
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            copy.enumerateAttribute(.foregroundColor, in: NSRange(location: 0, length: copy.length)) { value, range, _ in
+                if let color = value as? NSColor, let fixed = NSColor(cgColor: color.cgColor) {
+                    copy.addAttribute(.foregroundColor, value: fixed, range: range)
+                }
+            }
+        }
+        return copy
     }
 }

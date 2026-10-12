@@ -10,6 +10,14 @@ struct SpectrumAnalyzerApp: App {
             ContentView(model: model)
         }
         .windowLevel(model.pinned ? .floating : .normal)
+        // Stays on the laptop, with the keyboard, while the main window runs on a tablet.
+        Window("AI advice", id: AdviceHost.windowID) {
+            AdviceHost(model: model, isInWindow: true)
+                .frame(minWidth: AdviceWindowPlacer.minWidth, minHeight: 300)
+                .background(AdviceWindowPlacer())
+                .onAppear { model.adviceInWindow = true }
+                .onDisappear { model.adviceInWindow = false }
+        }
     }
 }
 
@@ -18,6 +26,18 @@ struct SpectrumAnalyzerApp: App {
 @MainActor
 final class AppModel: ObservableObject {
     let graph = LiveSink(GraphFrame())
+    let octaves = LiveSink(OctaveFrame())
+    /// Real-time follows the signal like Friture; Tune shows figures over the
+    /// window of playing, which hold still while you turn a knob.
+    @Published var viewMode = UserDefaults.standard.string(forKey: "view.mode").flatMap(ViewMode.init(rawValue:)) ?? .tune {
+        didSet {
+            UserDefaults.standard.set(viewMode.rawValue, forKey: "view.mode")
+            guitarOctaves = OctaveLevels()
+            mixOctaves = OctaveLevels()
+            octaveCaps.reset()
+            refreshComparison()
+        }
+    }
     @Published var showPeakHold = UserDefaults.standard.bool(forKey: "graph.showPeakHold") {
         didSet {
             UserDefaults.standard.set(showPeakHold, forKey: "graph.showPeakHold")
@@ -83,6 +103,8 @@ final class AppModel: ObservableObject {
         didSet { AdviceSettings.store(adviceFetchDomains, AdviceSettings.fetchDomainsKey, default: AdviceSettings.defaultFetchDomains) }
     }
     @Published var adviceAvailable = false
+    /// The advice panel is in its own window instead of the main one.
+    @Published var adviceInWindow = false
     @Published var guitarThresholdDBFS = AppModel.storedThreshold("levels.guitarThreshold") {
         didSet {
             UserDefaults.standard.set(guitarThresholdDBFS, forKey: "levels.guitarThreshold")
@@ -107,7 +129,7 @@ final class AppModel: ObservableObject {
     @Published var reference: Reference? {
         didSet {
             exportDirty = true
-            referencePoints = reference.map(GraphScale.points(of:))
+            referencePoints = reference.flatMap { $0.isFull ? GraphScale.points(of: $0) : nil }
             verdictTracker.clear()
         }
     }
@@ -152,6 +174,8 @@ final class AppModel: ObservableObject {
     private var peakHold = PeakHold()
     private var verdictTracker = VerdictTracker()
     private var referencePoints: [SpectrumPoint]?
+    /// Tune: the curves the graph shows instead of the live FFT.
+    private var tuneCurves: (guitar: [SpectrumPoint]?, mix: [SpectrumPoint]) = (nil, [])
     private let snapshotStore = SnapshotStore()
     private let exportServer = LocalServer()
     private var exportRunning = false
@@ -161,8 +185,15 @@ final class AppModel: ObservableObject {
     private var exportDirty = false
     private var exportSequence = 0
     private var tickCount = 0
-    /// Meters and the comparison refresh at 10 Hz; more is not readable.
+    /// The raw readings and the comparison refresh at 10 Hz; the meters
+    /// themselves move every tick.
     private static let levelsEveryTicks = 3
+    /// The frames each meter last read up to.
+    private var guitarMeterHead = 0
+    private var mixMeterHead = 0
+    private var guitarOctaves = OctaveLevels()
+    private var mixOctaves = OctaveLevels()
+    private var octaveCaps = PeakHold()
     /// Each permission check is a synchronous round trip to tccd on the main
     /// thread, so it runs once a second, not every frame.
     private static let permissionsEveryTicks = 30
@@ -329,13 +360,17 @@ final class AppModel: ObservableObject {
     }
 
     private var windowHops: Int { Int(Double(windowSeconds) / Payload.hopSeconds) }
+    /// Paused or replaying, the windows end where the scrubber is.
+    private var windowEnd: Int { session.isLive ? .max : session.currentHead }
 
-    /// Stores the guitar's last N active seconds as the reference (KTD7).
+    /// Stores the guitar's last N active seconds as the reference (KTD7); a
+    /// shorter window is refused and the reference stays as it was (R25).
     func setReference() {
-        let guitar = guitarLog.window(threshold: guitarThresholdDBFS, limit: windowHops)
-        let mix = mixLog.window(threshold: mixThresholdDBFS, limit: windowHops)
-        guard let made = Reference.make(guitar: guitar, mix: mix, windowSeconds: windowSeconds) else {
-            referenceStatus = "No active guitar in the kept history. Reference not set."
+        let guitar = guitarLog.window(threshold: guitarThresholdDBFS, limit: windowHops, upTo: windowEnd)
+        let mix = mixLog.window(threshold: mixThresholdDBFS, limit: windowHops, upTo: windowEnd)
+        guard guitar.hops.count >= windowHops,
+              let made = Reference.make(guitar: guitar, mix: mix, windowSeconds: windowSeconds) else {
+            referenceStatus = String(format: "Need %d s of playing, have %.0f", windowSeconds, guitar.activeSeconds.rounded(.down))
             return
         }
         reference = made
@@ -383,15 +418,47 @@ final class AppModel: ObservableObject {
     }
 
     private func refreshComparison() {
-        let comparison = reference.map {
-            Comparison.make(reference: $0, window: guitarLog.window(threshold: guitarThresholdDBFS, limit: windowHops, since: referenceMark),
+        let comparison = reference.flatMap { $0.isFull ? $0 : nil }.map {
+            Comparison.make(reference: $0, window: guitarLog.window(threshold: guitarThresholdDBFS, limit: windowHops, since: referenceMark, upTo: windowEnd),
                             windowHops: windowHops)
         }
         live.setComparison(comparison)
-        live.setVerdict(verdictTracker.update(comparison), isPaused: state != .live)
-        let history = HistoryFrame(points: HistoryScale.points(log: guitarLog, thresholdDBFS: guitarThresholdDBFS),
-                                   referenceLoudnessDB: reference.map { Loudness.db(bands: $0.guitarBands) })
+        live.setVerdict(verdictTracker.update(comparison), isPaused: state != .live,
+                        referenceTooShort: reference.map { !$0.isFull } ?? false)
+        let referenceLoudness = reference.map { Loudness.db(bands: $0.guitarBands) }
+        let isTune = viewMode == .tune
+        let history = HistoryFrame(points: isTune ? HistoryScale.tunePoints(log: guitarLog, thresholdDBFS: guitarThresholdDBFS)
+                                                  : HistoryScale.points(log: guitarLog),
+                                   referenceLoudnessDB: referenceLoudness, isTune: isTune)
         if history != live.history.value { live.history.send(history) }
+        if isTune {
+            refreshTuneFigures(comparison: comparison)
+        } else {
+            live.setTable(nil)
+        }
+    }
+
+    /// Tune: the figures and octave bars over the same window the verdict
+    /// reads, so they change only as new playing lands.
+    private func refreshTuneFigures(comparison: Comparison?) {
+        // Scrubbed back, the curves show the playing there, even from before the reference.
+        let guitarWindow = interfaceInput.status == .running
+            ? guitarLog.window(threshold: guitarThresholdDBFS, limit: windowHops, since: session.isLive ? referenceMark : 0,
+                               upTo: windowEnd) : nil
+        let mixWindow = mixLog.window(threshold: mixThresholdDBFS, limit: windowHops, upTo: windowEnd)
+        live.setTable(LevelsTable(guitar: guitarWindow, mix: mixWindow, reference: reference, comparison: comparison,
+                                  windowSeconds: windowSeconds))
+        let bars = { (window: ActiveWindow) in window.hops.isEmpty ? nil : OctaveLevels.points(bandPower: window.bandPower) }
+        let curve = { (window: ActiveWindow) in window.hops.isEmpty ? nil : GraphScale.points(displayPower: window.displayPower) }
+        tuneCurves = (guitarWindow.flatMap(curve), curve(mixWindow) ?? [])
+        let frame = OctaveFrame(guitar: guitarWindow.flatMap(bars),
+                                mix: bars(mixWindow) ?? [],
+                                reference: comparison.flatMap { comparison in
+                                    reference.map { GraphScale.shifted(OctaveLevels.points(bandPower: $0.guitarBands),
+                                                                       by: comparison.loudnessDifferenceDB ?? 0) }
+                                },
+                                windowSeconds: windowSeconds)
+        if frame != octaves.value { octaves.send(frame) }
     }
 
     enum LevelSource { case guitar, mix }
@@ -539,6 +606,16 @@ final class AppModel: ObservableObject {
         setIfChanged(\.adviceAvailable, AdviceAvailability.isAvailable(historyRange: mixRing.range))
     }
 
+    /// The frames of `ring` after `last`, up to `head` but never past what is
+    /// written: the live clock runs a capture chunk ahead of the ring. At most
+    /// 1 s, so a jump in the head does not stall a tick.
+    private static func unread(_ ring: HistoryRing, upTo head: Int, after last: inout Int) -> [Int16] {
+        let end = min(head, ring.head)
+        let count = min(max(end - last, 0), HistoryRing.sampleRate)
+        last = end
+        return ring.read(from: end - count, count: count)
+    }
+
     private func tick() {
         tickCount &+= 1
         mixWorker.drain()
@@ -557,11 +634,33 @@ final class AppModel: ObservableObject {
         if showPeakHold, let guitarPoints {
             peakHold.update(with: guitarPoints, elapsedSeconds: SpectrumAnalyzer.liveHopSeconds)
         }
-        graph.send(GraphFrame(guitar: guitarPoints, mix: mixPoints,
-                              peakHold: showPeakHold && guitarPoints != nil ? peakHold.points : nil,
+        let isTune = viewMode == .tune
+        graph.send(GraphFrame(guitar: isTune ? tuneCurves.guitar : guitarPoints,
+                              mix: isTune ? tuneCurves.mix : mixPoints,
+                              peakHold: !isTune && showPeakHold && guitarPoints != nil ? peakHold.points : nil,
                               reference: referencePoints,
                               referenceOffsetDB: live.comparison?.loudnessDifferenceDB ?? 0,
-                              toneStepDB: Float(toneStep)))
+                              toneStepDB: Float(toneStep),
+                              toneSteps: live.verdict?.toneSteps,
+                              windowSeconds: isTune ? windowSeconds : nil))
+        let guitarRunning = interfaceInput.status == .running
+        let guitarMeterFrames = Self.unread(guitarRing, upTo: head, after: &guitarMeterHead)
+        live.showMeters(guitar: guitarRunning ? guitarMeterFrames : nil,
+                        mix: Self.unread(mixRing, upTo: head, after: &mixMeterHead),
+                        seconds: SpectrumAnalyzer.liveHopSeconds)
+        if viewMode == .realtime {
+            let guitarBands = guitarRunning
+                ? guitarOctaves.update(ring: guitarRing, head: min(head, guitarRing.head), seconds: SpectrumAnalyzer.liveHopSeconds) : nil
+            if let guitarBands {
+                octaveCaps.update(with: guitarBands, elapsedSeconds: SpectrumAnalyzer.liveHopSeconds)
+            } else {
+                guitarOctaves = OctaveLevels()
+                octaveCaps.reset()
+            }
+            octaves.send(OctaveFrame(guitar: guitarBands,
+                                     mix: mixOctaves.update(ring: mixRing, head: min(head, mixRing.head), seconds: SpectrumAnalyzer.liveHopSeconds),
+                                     caps: guitarBands != nil ? octaveCaps.points : nil))
+        }
         if tickCount % Self.levelsEveryTicks == 0 {
             live.setMeters(guitar: interfaceInput.status == .running ? LevelMeter.read(ring: guitarRing, head: head) : nil,
                            mix: LevelMeter.read(ring: mixRing, head: head),
@@ -588,6 +687,7 @@ final class AppModel: ObservableObject {
 struct ContentView: View {
     @ObservedObject var model: AppModel
     @State private var isShowingMore = false
+    @State private var displayHeight: CGFloat = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -612,31 +712,43 @@ struct ContentView: View {
             VSplitView {
                 VStack(spacing: 0) {
                     VerdictStrip(live: model.live, model: model)
-                    graph.frame(minHeight: 160)
-                    HistoryStrip(sink: model.live.history).frame(height: 40)
-                    LevelsPanel(model: model)
+                    graph.frame(minHeight: 220)
+                    OctaveBars(sink: model.octaves).frame(height: 130)
+                    // Details takes what is left above the graph's minimum, never more.
+                    LevelsPanel(model: model).layoutPriority(1)
                     controlsBar
                 }
-                .frame(minHeight: 360, idealHeight: 520)
-                advicePanel
-                    .frame(minHeight: 80, idealHeight: 360)
+                // No fixed minimum: the children's sum is the minimum, so it
+                // grows when Details opens.
+                .frame(idealHeight: 520)
+                if !model.adviceInWindow {
+                    AdviceHost(model: model, isInWindow: false)
+                        .frame(minHeight: 80, idealHeight: 360)
+                }
             }
         }
     }
 
-    /// The graph, the meters and the touch row; everything else is in More.
+    /// The verdict, the graphs on one frequency axis, the levels table, the
+    /// history and the touch row; everything else is in More.
     private var displayLayout: some View {
-        VStack(spacing: 0) {
-            graph
-            LevelsPanel(model: model)
+        let heights = PaneHeights(windowHeight: displayHeight)
+        return VStack(spacing: 0) {
+            VerdictStrip(live: model.live, model: model)
+            graph.frame(minHeight: 120)
+            Divider()
+            OctaveBars(sink: model.octaves).frame(height: heights.octave)
+            Divider()
+            LevelsPanel(model: model, displayHeights: heights)
             DisplayTouchRow(state: model.state,
-                            status: model.referenceStatus,
                             onPause: model.pause,
                             onResumeLive: model.resumeLive,
                             onSetReference: model.setReference,
                             onReset: model.reset,
                             onMore: { isShowingMore = true })
+                .background(.primary.opacity(0.05))
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { displayHeight = $0 }
     }
 
     private var moreSheet: some View {
@@ -654,7 +766,9 @@ struct ContentView: View {
                     controlsBar
                     ReferenceMenu(model: model).padding(.horizontal, 8)
                     LevelsControls(model: model).padding(.horizontal, 8)
-                    advicePanel.frame(minHeight: 360)
+                    if !model.adviceInWindow {
+                        AdviceHost(model: model, isInWindow: false).frame(minHeight: 360)
+                    }
                 }
             }
         }
@@ -677,6 +791,7 @@ struct ContentView: View {
         ControlsBar(state: model.state,
                     scrub: model.scrub,
                     pinned: $model.pinned,
+                    viewMode: $model.viewMode,
                     showPeakHold: $model.showPeakHold,
                     displayMode: Binding(get: { model.displayMode }, set: { model.setDisplayMode($0) }),
                     timeConstant: $model.timeConstant,
@@ -686,8 +801,37 @@ struct ContentView: View {
                     onScrub: model.scrub,
                     onReset: model.reset)
     }
+}
 
-    private var advicePanel: some View {
+/// The advice panel with its header, which moves it into its own window and
+/// back into the main one.
+struct AdviceHost: View {
+    static let windowID = "advice"
+    @ObservedObject var model: AppModel
+    let isInWindow: Bool
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismissWindow) private var dismissWindow
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("AI advice").font(.headline)
+                Spacer()
+                if isInWindow {
+                    Button("Attach window") { dismissWindow(id: Self.windowID) }
+                        .help("Close this window and show the advice in the main window again")
+                } else {
+                    Button("Detach window") { openWindow(id: Self.windowID) }
+                        .help("Show the advice in its own window, for example on the laptop while the main window is on a tablet")
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.top, 6)
+            panel
+        }
+    }
+
+    private var panel: some View {
         AdvicePanel(state: model.adviceState,
                     isAvailable: model.adviceAvailable,
                     progress: model.adviceProgress,
@@ -708,6 +852,50 @@ struct ContentView: View {
                     onStartOver: model.startOver,
                     onRequest: model.requestAdvice,
                     onCancel: model.cancelAdvice)
+    }
+}
+
+/// Lists the advice window in the Dock and Window menus, which SwiftUI leaves
+/// out for a `Window` scene, and docks it to the main window's side.
+struct AdviceWindowPlacer: NSViewRepresentable {
+    static let minWidth: Double = 640
+
+    func makeNSView(context: Context) -> NSView { PlacerView() }
+    func updateNSView(_ view: NSView, context: Context) {}
+
+    /// Edge to edge with the main window, same top and height: right, else
+    /// left, else the main window shifts left to make room on its right.
+    static func docked(advice width: Double, main: NSRect, in visible: NSRect) -> (main: NSRect, advice: NSRect) {
+        let width = min(width, max(minWidth, visible.width - main.width))
+        var main = main
+        var advice = NSRect(x: main.maxX, y: main.minY, width: width, height: main.height)
+        if main.minX - width >= visible.minX && advice.maxX > visible.maxX {
+            advice.origin.x = main.minX - width
+        } else if advice.maxX > visible.maxX {
+            main.origin.x = max(visible.minX, visible.maxX - width - main.width)
+            advice.origin.x = main.maxX
+        }
+        return (main, advice)
+    }
+
+    private final class PlacerView: NSView {
+        override func viewDidMoveToWindow() {
+            guard let window else { return }
+            window.isExcludedFromWindowsMenu = false
+            // After SwiftUI restores the saved frame and orders the window.
+            DispatchQueue.main.async { [weak window] in
+                guard let window,
+                      let main = NSApp.windows.first(where: { $0 !== window && $0.isVisible && $0.canBecomeMain }),
+                      let screen = main.screen else { return }
+                // The main window on the tablet: the advice stays on the laptop where it was.
+                if window.screen == screen {
+                    let docked = AdviceWindowPlacer.docked(advice: window.frame.width, main: main.frame, in: screen.visibleFrame)
+                    main.setFrame(docked.main, display: true)
+                    window.setFrame(docked.advice, display: true)
+                }
+                window.makeKeyAndOrderFront(nil)
+            }
+        }
     }
 }
 

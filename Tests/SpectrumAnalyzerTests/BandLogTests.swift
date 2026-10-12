@@ -32,6 +32,18 @@ struct BandLogTests {
         #expect(ThirdOctaveBands.centerFrequencies[peak] == 1000)
     }
 
+    @Test("a window scrubbed back to 8 s ends there, at the newest hop up to that frame")
+    func windowEndsAtScrub() {
+        let ring = HistoryRing(capacity: 40 * rate)
+        writeTone(ring, rmsDBFS: -20, seconds: 12)
+        let log = BandLog()
+        advanceHop(by: 24, log: log, ring: ring, from: 0)
+
+        let window = log.window(threshold: -60, limit: 6, upTo: 8 * rate)
+        #expect(window.hops.count == 6)
+        #expect(window.hops.last?.endFrame == 8 * rate)
+    }
+
     @Test("covers AE2: hiss at -62 dBFS learns -52, and 30 s more of it adds no active hops")
     func learnsNoiseFloor() {
         let ring = HistoryRing(capacity: 60 * rate)

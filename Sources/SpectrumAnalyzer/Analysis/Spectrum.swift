@@ -18,7 +18,14 @@ final class SpectrumAnalyzer {
     static let displayPointCount = 240
     static let minFrequency = 20.0
     static let maxFrequency = 20_000.0
-    static let displayFloorDB: Float = -100
+    /// Below the graph's range, so digital silence never draws (KTD8).
+    static let displayFloorDB: Float = -160
+    /// A Hann window's equivalent noise bandwidth in bins: a sine's peak bin
+    /// holds this fraction of its power.
+    static let hannENBW: Float = 1.5
+    /// Friture's |rfft(x * hann)|^2 / N^2 puts a full-scale sine at
+    /// 20 * log10(1/4) = -12 dB; this power ratio matches it (KTD8).
+    static let fritureScale: Float = 1.0 / 16
     static let liveHopSeconds = 1.0 / 30
     static let warmHopSeconds = 0.5
 
@@ -29,6 +36,11 @@ final class SpectrumAnalyzer {
             exp2(log2Min + (log2Max - log2Min) * Double(i) / Double(displayPointCount - 1))
         }
     }()
+
+    /// KTD8: a point's level on Friture's PSD scale, where a full-scale sine reads -12 dB.
+    static func pointDB(_ power: Float) -> Float {
+        dB(power * hannENBW * fritureScale, floor: displayFloorDB)
+    }
 
     let timeConstant: Double
     private var lastHead: Int?
@@ -91,7 +103,7 @@ final class SpectrumAnalyzer {
     }
 
     private func points() -> [SpectrumPoint] {
-        zip(Self.displayFrequencies, smoothedPower).map { SpectrumPoint(frequencyHz: $0, db: dB($1, floor: Self.displayFloorDB)) }
+        zip(Self.displayFrequencies, smoothedPower).map { SpectrumPoint(frequencyHz: $0, db: Self.pointDB($1)) }
     }
 
     /// Runs the FFT over the `fftSize` frames ending at absolute frame
@@ -102,7 +114,7 @@ final class SpectrumAnalyzer {
     }
 
     /// Maps FFT bins onto the log-spaced display points by taking the loudest
-    /// bin in each point's bucket.
+    /// bin in each point's bucket, so a harmonic keeps its peak.
     static func mapToDisplayPoints(magnitudes: [Float], binHz: Double) -> [Float] {
         let nyquist = Double(HistoryRing.sampleRate) / 2
         return frequencyBuckets(centerFrequencies: displayFrequencies,

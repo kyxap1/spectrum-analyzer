@@ -1,35 +1,137 @@
 import SwiftUI
 
-/// Live RMS and peak for guitar and mix (R5) and the comparison against the
-/// reference (R8). In normal mode they sit with the controls in a collapsed
-/// Details section (R15); display mode shows the meters and comparison and
-/// moves the controls into the More sheet. The guitar meter reads unavailable
-/// while the interface is not captured.
+/// The difference pane, the levels and the loudness history, edge to edge so
+/// their plots line up with the graphs above (R5, R8, R13). Tune shows the
+/// levels as a table, real-time as meters. Normal mode keeps them in a
+/// collapsed Details section with the settings under them (R16); display mode
+/// shows them always and moves the settings into the More sheet. The guitar
+/// reads unavailable while the interface is not captured.
 struct LevelsPanel: View {
     /// Not observed: the fast-changing parts watch `LiveLevels` themselves.
     let model: AppModel
+    var displayHeights = PaneHeights.floor
     @Environment(\.displaySizes) private var sizes
     @State private var isExpanded = false
+    @State private var isShowingSettings = false
+    @State private var contentHeight: CGFloat = 200
 
     var body: some View {
-        Group {
-            if sizes.isDisplayMode {
-                VStack(alignment: .leading, spacing: 4) {
-                    MetersRow(live: model.live)
-                    ComparisonSection(live: model.live)
-                }
-            } else {
-                DisclosureGroup("Details", isExpanded: $isExpanded) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ComparisonSection(live: model.live)
-                        MetersRow(live: model.live)
-                        LevelsControls(model: model)
+        if sizes.isDisplayMode {
+            stack(differenceHeight: displayHeights.difference, historyHeight: displayHeights.history)
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                DisclosureHeader(title: "Details", isExpanded: $isExpanded)
+                if isExpanded {
+                    // As tall as its content, so the graph above keeps the
+                    // rest; it scrolls only when the window is too short.
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 0) {
+                            stack(differenceHeight: 150, historyHeight: 110)
+                            DisclosureHeader(title: "Settings", isExpanded: $isShowingSettings)
+                            if isShowingSettings {
+                                LevelsControls(model: model).padding(.horizontal, 8).padding(.bottom, 6)
+                            }
+                        }
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
                     }
+                    .frame(minHeight: min(200, contentHeight), maxHeight: contentHeight)
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    private func stack(differenceHeight: CGFloat, historyHeight: CGFloat) -> some View {
+        VStack(spacing: 0) {
+            DifferencePane(live: model.live, sink: model.graph, height: differenceHeight)
+            DisplayLevels(live: model.live)
+            Divider()
+            HistoryStrip(sink: model.live.history).frame(height: historyHeight)
+        }
+    }
+}
+
+/// A plain chevron and title; unlike `DisclosureGroup` it does not indent
+/// what it opens, so the graphs inside keep the window's left edge.
+private struct DisclosureHeader: View {
+    let title: String
+    @Binding var isExpanded: Bool
+
+    var body: some View {
+        Button { isExpanded.toggle() } label: {
+            HStack(spacing: 6) {
+                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .frame(width: 12)
+                Text(title)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
         .padding(.horizontal, 8)
-        .padding(.vertical, 4)
+        .padding(.vertical, 5)
+    }
+}
+
+/// Tune: the levels table; real-time: the meters.
+private struct DisplayLevels: View {
+    @ObservedObject var live: LiveLevels
+    @Environment(\.displaySizes) private var sizes
+
+    var body: some View {
+        if let table = live.table {
+            LevelsTableView(table: table)
+                .padding(.leading, sizes.plotLeft)
+                .padding(.trailing, 10)
+                .padding(.vertical, 4)
+        } else {
+            MetersRow(live: live)
+                .padding(.leading, sizes.plotLeft)
+                .padding(.vertical, 4)
+        }
+    }
+}
+
+/// Loudness, average peak and crest per row, under a header ruled off like a
+/// graph's title from its plot. The rows sit 5 pt inside the plot edges.
+private struct LevelsTableView: View {
+    let table: LevelsTable
+    @Environment(\.displaySizes) private var sizes
+
+    var body: some View {
+        Grid(alignment: .trailing, horizontalSpacing: 12, verticalSpacing: 2) {
+            GridRow {
+                Text("Levels").font(sizes.legend).gridColumnAlignment(.leading)
+                ForEach(["Loudness, dB", "Avg peak, dBFS", "Crest, dB", "Playing in window"], id: \.self) {
+                    Text($0).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .trailing)
+                }
+            }
+            Rectangle().fill(Color(nsColor: GraphLayerView.frameColor)).frame(height: 1)
+            if let guitar = table.guitar { row("Guitar", GraphLayerView.guitarColor, guitar, format: LevelMeter.format) }
+            if let reference = table.reference { row("Reference", GraphLayerView.referenceColor, reference, format: LevelMeter.format) }
+            if let difference = table.difference { row("Guitar \u{2212} Reference", nil, difference, format: Self.signed).bold() }
+            row("Mix", GraphLayerView.mixColor, table.mix, format: LevelMeter.format)
+        }
+        .font(sizes.isDisplayMode ? .system(size: 14) : .body)
+        .monospacedDigit()
+    }
+
+    private func row(_ title: String, _ color: NSColor?, _ row: LevelsRow, format: (Float) -> String) -> some View {
+        GridRow {
+            HStack(spacing: 8) {
+                if let color { Circle().fill(Color(nsColor: color)).frame(width: 10, height: 10) }
+                Text(title)
+            }
+            .padding(.leading, 5)
+            Text(row.loudnessDB.map(format) ?? "\u{2014}")
+            Text(row.averagePeakDBFS.map(format) ?? "\u{2014}")
+            Text(row.crestDB.map(format) ?? "\u{2014}")
+            Text(row.playing).padding(.trailing, 5)
+        }
+    }
+
+    private static func signed(_ value: Float) -> String {
+        String(format: "%+.1f", value)
     }
 }
 
@@ -46,55 +148,69 @@ private struct MetersRow: View {
     }
 }
 
-private struct ComparisonSection: View {
+/// Only while a usable reference is set (R13).
+private struct DifferencePane: View {
     @ObservedObject var live: LiveLevels
+    let sink: LiveSink<GraphFrame>
+    let height: CGFloat
 
     var body: some View {
-        if let comparison = live.comparison {
-            ComparisonView(comparison: comparison,
-                           windowSeconds: Int(Double(comparison.windowHops) * Payload.hopSeconds))
+        if live.comparison != nil {
+            SpectrumGraphView(sink: sink, kind: .difference).frame(height: height)
         }
     }
 }
 
-/// Thresholds with Learn noise, the window length and the export (R6, R7).
+/// Thresholds with Learn noise, the window length and the export (R6, R7),
+/// one labelled row each.
 struct LevelsControls: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                thresholdField("Guitar threshold", value: $model.guitarThresholdDBFS, source: .guitar)
-                thresholdField("Mix threshold", value: $model.mixThresholdDBFS, source: .mix)
-                Text(model.noiseMessage).foregroundStyle(.secondary).lineLimit(1)
-                Spacer()
+        Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
+            thresholdRow("Guitar input", value: $model.guitarThresholdDBFS, source: .guitar)
+            thresholdRow("Mix input", value: $model.mixThresholdDBFS, source: .mix)
+            if !model.noiseMessage.isEmpty {
+                GridRow {
+                    Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
+                    Text(model.noiseMessage).foregroundStyle(.secondary).lineLimit(1)
+                }
             }
-            HStack {
-                Picker("Window", selection: $model.windowSeconds) {
+            GridRow {
+                Text("Comparison window")
+                Picker("Comparison window", selection: $model.windowSeconds) {
                     ForEach([5, 10, 20], id: \.self) { Text("\($0) s").tag($0) }
                 }
+                .labelsHidden()
                 .pickerStyle(.segmented)
                 .fixedSize()
-                Toggle("Local data export", isOn: $model.exportEnabled)
-                    .help("Serves the levels as JSON on 127.0.0.1 for a local agent; off until you turn it on")
-                Text(model.exportStatus)
-                    .foregroundStyle(model.exportStatus.hasPrefix("http") ? Color.secondary : Color.red)
-                    .textSelection(.enabled)
-                    .lineLimit(1)
-                Spacer()
+            }
+            GridRow {
+                Text("Agent access")
+                HStack {
+                    Toggle("Local data export", isOn: $model.exportEnabled)
+                        .help("Serves the levels as JSON on 127.0.0.1 for a local agent; off until you turn it on")
+                    Text(model.exportStatus)
+                        .foregroundStyle(model.exportStatus.hasPrefix("http") ? Color.secondary : Color.red)
+                        .textSelection(.enabled)
+                        .lineLimit(1)
+                }
             }
         }
     }
 
-    private func thresholdField(_ title: String, value: Binding<Float>, source: AppModel.LevelSource) -> some View {
-        HStack(spacing: 4) {
+    private func thresholdRow(_ title: String, value: Binding<Float>, source: AppModel.LevelSource) -> some View {
+        GridRow {
             Text(title)
-            TextField("", value: value, format: .number.precision(.fractionLength(0)))
-                .frame(width: 48)
-                .multilineTextAlignment(.trailing)
-            Text("dBFS")
-            Button("Learn noise") { model.learnNoise(source) }
-                .help("Press while not playing: sets the threshold to the last 3 s of noise plus 10 dB")
+            HStack(spacing: 4) {
+                Text("Threshold")
+                TextField("", value: value, format: .number.precision(.fractionLength(0)))
+                    .frame(width: 48)
+                    .multilineTextAlignment(.trailing)
+                Text("dBFS")
+                Button("Learn noise") { model.learnNoise(source) }
+                    .help("Press while not playing: sets the threshold to the last 3 s of noise plus 10 dB")
+            }
         }
     }
 }
@@ -104,11 +220,11 @@ struct LevelsControls: View {
 private struct MeterView: View {
     let title: String
     let captured: Bool
-    let sink: LiveSink<LevelReading?>
+    let sink: LiveSink<MeterDisplay?>
     @Environment(\.displaySizes) private var sizes
 
-    /// Bar spans -60 dBFS to 0 dBFS.
-    private static let floorDBFS: Float = -60
+    /// Friture refreshes the numbers this often, so they stay readable.
+    static let textSeconds = 0.25
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -130,26 +246,29 @@ private struct MeterView: View {
     }
 
     /// A fixed-width box, so a changing number never shifts its neighbours.
-    private func readout(_ value: KeyPath<LevelReading, Float>) -> some View {
+    private func readout(_ value: KeyPath<MeterDisplay, Float>) -> some View {
         MeterReadout(sink: sink, value: value, font: sizes.readoutNSFont)
             .frame(width: sizes.isDisplayMode ? 130 : 52)
     }
 
+    /// Bar deflection on Friture's IEC 60268-18 scale.
     static func fraction(_ dBFS: Float) -> CGFloat {
-        guard dBFS.isFinite else { return 0 }
-        return CGFloat(min(max((dBFS - floorDBFS) / -floorDBFS, 0), 1))
+        CGFloat(MeterBallistics.iec(dBFS))
     }
 }
 
 private struct MeterReadout: NSViewRepresentable {
-    let sink: LiveSink<LevelReading?>
-    let value: KeyPath<LevelReading, Float>
+    let sink: LiveSink<MeterDisplay?>
+    let value: KeyPath<MeterDisplay, Float>
     let font: NSFont
 
     func makeNSView(context: Context) -> ReadoutView {
         let view = ReadoutView()
         view.font = font
         sink.attach(view) { [value] view, reading in
+            let now = Date()
+            guard reading == nil || now.timeIntervalSince(view.shownAt) >= MeterView.textSeconds else { return }
+            view.shownAt = now
             view.text = reading.map { LevelMeter.format($0[keyPath: value]) } ?? ""
         }
         return view
@@ -168,6 +287,7 @@ private struct MeterReadout: NSViewRepresentable {
 /// Right-aligned text, redrawn only when it changes.
 private final class ReadoutView: PassiveView {
     var text = "" { didSet { if text != oldValue { needsDisplay = true } } }
+    var shownAt = Date.distantPast
     var font = NSFont.systemFont(ofSize: NSFont.systemFontSize) {
         didSet {
             guard font != oldValue else { return }
@@ -184,12 +304,13 @@ private final class ReadoutView: PassiveView {
         let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.labelColor]
         let string = text as NSString
         let size = string.size(withAttributes: attributes)
-        string.draw(at: NSPoint(x: bounds.width - size.width, y: (bounds.height - size.height) / 2), withAttributes: attributes)
+        string.draw(at: NSPoint(x: bounds.width - size.width, y: (bounds.height - size.height) / 2),
+                    withAttributes: attributes)
     }
 }
 
 private struct MeterBar: NSViewRepresentable {
-    let sink: LiveSink<LevelReading?>
+    let sink: LiveSink<MeterDisplay?>
 
     func makeNSView(context: Context) -> MeterBarView {
         let view = MeterBarView()
@@ -205,86 +326,22 @@ private class PassiveView: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
-/// RMS as a filled bar with the peak as a 2 pt line.
+/// As in Friture: the peak as a light bar, RMS as a solid bar over it and
+/// the held peak as a 2 pt line.
 private final class MeterBarView: PassiveView {
-    var reading: LevelReading? { didSet { if reading != oldValue { needsDisplay = true } } }
+    var reading: MeterDisplay? { didSet { if reading != oldValue { needsDisplay = true } } }
 
     override func draw(_ dirtyRect: NSRect) {
         NSColor.quaternaryLabelColor.setFill()
         bounds.fill(using: .sourceOver)
         guard let reading else { return }
+        NSColor.controlAccentColor.withAlphaComponent(0.4).setFill()
+        NSRect(x: 0, y: 0, width: bounds.width * MeterView.fraction(reading.peakDBFS), height: bounds.height).fill(using: .sourceOver)
         NSColor.controlAccentColor.setFill()
         NSRect(x: 0, y: 0, width: bounds.width * MeterView.fraction(reading.rmsDBFS), height: bounds.height).fill(using: .sourceOver)
         NSColor.labelColor.setFill()
-        NSRect(x: max(0, bounds.width * MeterView.fraction(reading.peakDBFS) - 2), y: 0, width: 2, height: bounds.height)
+        NSRect(x: max(0, bounds.width * CGFloat(reading.heldPeakIEC) - 2), y: 0, width: 2, height: bounds.height)
             .fill(using: .sourceOver)
-    }
-}
-
-/// The overall difference and the 10 octave-band differences, each as a
-/// signed number with a bar centred on 0 dB, marked partial until N active
-/// seconds have accumulated since the press.
-private struct ComparisonView: View {
-    let comparison: Comparison
-    let windowSeconds: Int
-    @Environment(\.displaySizes) private var sizes
-
-    /// Bars span +/-12 dB.
-    private static let spanDB: Float = 12
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack {
-                Text("Loudness").font(sizes.label)
-                Text(Self.signed(comparison.loudnessDifferenceDB) + " dB").font(sizes.readout).monospacedDigit()
-                Text(String(format: "%.1f / %d s", comparison.activeSeconds, windowSeconds))
-                    .font(sizes.label).foregroundStyle(.secondary).monospacedDigit()
-                if comparison.partial { Text("partial").font(sizes.label).foregroundStyle(.orange) }
-                Text("Avg peak").font(sizes.label)
-                Text(Self.signed(comparison.averagePeakDifferenceDB) + " dB").font(sizes.readout).monospacedDigit()
-                Text("Crest").font(sizes.label)
-                Text(Self.signed(comparison.crestDifferenceDB) + " dB").font(sizes.readout).monospacedDigit()
-            }
-            HStack(spacing: 6) {
-                ForEach(0..<OctaveBands.labels.count, id: \.self) { i in
-                    let difference = comparison.octaveDifferencesDB?[i]
-                    VStack(spacing: 2) {
-                        Text(OctaveBands.labels[i]).font(sizes.isDisplayMode ? sizes.axis : .caption)
-                        Text(Self.signed(difference)).font(sizes.isDisplayMode ? sizes.label : .caption).monospacedDigit()
-                        CenteredBar(value: difference.map { CGFloat(min(max($0 / Self.spanDB, -1), 1)) })
-                        Text("crest " + Self.signed(comparison.octaveCrestDifferencesDB?[i]))
-                            .font(sizes.isDisplayMode ? sizes.axis : .caption2).foregroundStyle(.secondary).monospacedDigit()
-                    }
-                    .frame(minWidth: sizes.isDisplayMode ? 100 : 40)
-                }
-            }
-        }
-    }
-
-    private static func signed(_ value: Float?) -> String {
-        guard let value else { return "\u{2014}" }
-        return String(format: "%+.1f", value)
-    }
-}
-
-private struct CenteredBar: View {
-    /// -1...1, nil for no reading.
-    let value: CGFloat?
-
-    var body: some View {
-        GeometryReader { geometry in
-            let half = geometry.size.width / 2
-            ZStack(alignment: .leading) {
-                Rectangle().fill(.quaternary)
-                if let value {
-                    Rectangle().fill(.tint)
-                        .frame(width: abs(value) * half)
-                        .offset(x: value < 0 ? half + value * half : half)
-                }
-                Rectangle().fill(.secondary).frame(width: 1).offset(x: half)
-            }
-        }
-        .frame(height: 8)
     }
 }
 

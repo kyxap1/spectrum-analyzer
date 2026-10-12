@@ -40,24 +40,49 @@ struct DisplaySizes {
     let legend: Font
     let label: Font
     let readout: Font
+    let verdict: Font
     let touchHeight: CGFloat
 
     static let normal = DisplaySizes(isDisplayMode: false, axis: .caption2, legend: .caption, label: .headline,
-                                     readout: .body, touchHeight: 0)
-    /// About 2 m from a 10-inch 1920x1200 screen.
-    static let display = DisplaySizes(isDisplayMode: true, axis: .system(size: 20), legend: .system(size: 20),
-                                      label: .system(size: 24, weight: .semibold),
-                                      readout: .system(size: 40, weight: .semibold), touchHeight: 88)
+                                     readout: .body, verdict: .title.weight(.semibold), touchHeight: 0)
+    /// A 10-inch 1920x1200 tablet as a second display at 1280x800 points.
+    static let display = DisplaySizes(isDisplayMode: true, axis: .system(size: 15), legend: .system(size: 17),
+                                      label: .system(size: 22, weight: .semibold),
+                                      readout: .system(size: 24, weight: .semibold),
+                                      verdict: .system(size: 26, weight: .bold), touchHeight: 48)
 
     /// `readout` for numbers drawn by AppKit views, with fixed-width digits.
     var readoutNSFont: NSFont {
-        isDisplayMode ? .monospacedDigitSystemFont(ofSize: 40, weight: .semibold)
+        isDisplayMode ? .monospacedDigitSystemFont(ofSize: 24, weight: .semibold)
             : .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
     }
 
     /// `axis` and `legend` for text drawn by the graph's layers.
-    var axisNSFont: NSFont { isDisplayMode ? .systemFont(ofSize: 20) : .preferredFont(forTextStyle: .caption2) }
-    var legendNSFont: NSFont { isDisplayMode ? .systemFont(ofSize: 20) : .preferredFont(forTextStyle: .caption1) }
+    var axisNSFont: NSFont { isDisplayMode ? .systemFont(ofSize: 15) : .preferredFont(forTextStyle: .caption2) }
+    var legendNSFont: NSFont { isDisplayMode ? .systemFont(ofSize: 17) : .preferredFont(forTextStyle: .caption1) }
+
+    /// Every graph's plot starts here, so stacked graphs share one left edge.
+    var plotLeft: Double {
+        let width = { (string: String, font: NSFont) in (string as NSString).size(withAttributes: [.font: font]).width }
+        return ceil(max(width("\u{2212}100", axisNSFont), width("vs ref", legendNSFont))) + 10
+    }
+}
+
+/// Display mode's graph panes as shares of the window height, so a taller
+/// screen gives them room instead of only the spectrum graph, which takes
+/// what is left. The floors are the sizes tuned on a 1280x800 tablet.
+struct PaneHeights: Equatable {
+    static let floor = PaneHeights(windowHeight: 0)
+
+    let octave: CGFloat
+    let difference: CGFloat
+    let history: CGFloat
+
+    init(windowHeight: CGFloat) {
+        octave = max(144, (windowHeight * 0.18).rounded())
+        difference = max(137, (windowHeight * 0.15).rounded())
+        history = max(98, (windowHeight * 0.15).rounded())
+    }
 }
 
 private struct DisplaySizesKey: EnvironmentKey {
@@ -113,10 +138,10 @@ struct ScreenReader: NSViewRepresentable {
 
 /// Large touch targets for the tablet: Pause, Resume live, Set reference,
 /// Reset and More. Reset sits apart from Set reference so a mistap cannot
-/// clear the history (R15).
+/// clear the history (R15). The outcome of Set reference shows in the
+/// verdict strip.
 struct DisplayTouchRow: View {
     let state: SessionState
-    let status: String
     let onPause: () -> Void
     let onResumeLive: () -> Void
     let onSetReference: () -> Void
@@ -124,18 +149,17 @@ struct DisplayTouchRow: View {
     let onMore: () -> Void
 
     var body: some View {
-        VStack(spacing: 8) {
-            Text(status).font(DisplaySizes.display.label).foregroundStyle(.secondary).lineLimit(1)
-            HStack(spacing: 16) {
-                button("Pause", action: onPause).disabled(state != .live)
-                button("Resume live", action: onResumeLive).disabled(state == .live)
-                button("Set reference", action: onSetReference)
-                Spacer(minLength: 72)
-                button("Reset", action: onReset)
-                button("More", action: onMore)
-            }
+        HStack(spacing: 14) {
+            button("Pause", action: onPause).disabled(state != .live)
+            button("Resume live", action: onResumeLive).disabled(state == .live)
+            button("Set reference", action: onSetReference).buttonStyle(.borderedProminent)
+            Spacer(minLength: 72)
+            button("Reset", action: onReset)
+            button("More", action: onMore)
         }
-        .padding(12)
+        .buttonStyle(.bordered)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 8)
     }
 
     private func button(_ title: String, action: @escaping () -> Void) -> some View {
@@ -144,6 +168,5 @@ struct DisplayTouchRow: View {
                 .font(DisplaySizes.display.label)
                 .frame(maxWidth: .infinity, minHeight: DisplaySizes.display.touchHeight)
         }
-        .buttonStyle(.bordered)
     }
 }

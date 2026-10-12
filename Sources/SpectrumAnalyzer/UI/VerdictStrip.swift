@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The strings the verdict strip shows for a verdict (R2, R4, AE3).
+/// The strings the verdict strip shows for a verdict (R2, R4, R25, AE3).
 struct VerdictText: Equatable {
     var direction: String
     var detail: String?
@@ -9,8 +9,8 @@ struct VerdictText: Equatable {
     var status: String?
     var isDimmed = false
 
-    init(_ verdict: Verdict?, isPaused: Bool = false) {
-        direction = "Play, then press Set reference"
+    init(_ verdict: Verdict?, isPaused: Bool = false, referenceTooShort: Bool = false) {
+        direction = referenceTooShort ? "Reference too short \u{2014} set it again" : "Play, then press Set reference"
         if let verdict {
             if let unity = verdict.unitySteps {
                 let db = Float(unity) * verdict.unityStepDB
@@ -42,14 +42,16 @@ struct VerdictText: Equatable {
 
 /// The verdict in large type with Set reference and the Reference menu. It
 /// observes only the published text, which changes when a step does (KTD7).
+/// Display mode has Set reference in its touch row and the menu in More.
 struct VerdictStrip: View {
     @ObservedObject var live: LiveLevels
     let model: AppModel
+    @Environment(\.displaySizes) private var sizes
 
     var body: some View {
         let text = live.verdictText
         HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Text(text.direction).font(.title.weight(.semibold))
+            Text(text.direction).font(sizes.verdict)
             if let detail = text.detail { Text(detail).font(.title3).monospacedDigit() }
             VStack(alignment: .leading, spacing: 0) {
                 if let crest = text.crest { Text(crest) }
@@ -57,21 +59,39 @@ struct VerdictStrip: View {
             }
             .foregroundStyle(.secondary)
             if let status = text.status { Text(status).foregroundStyle(.secondary) }
-            Spacer()
+            // Messages sit left of the spacer, so one appearing never moves the buttons.
             if let warning = ClipLatch.warning(live.clipping) {
                 Text(warning).foregroundStyle(.red).fontWeight(.semibold)
             }
-            Button("Set reference", action: model.setReference)
-                .buttonStyle(.borderedProminent)
-            ReferenceMenu(model: model)
+            ReferenceStatus(model: model)
+            Spacer(minLength: 0)
+            if !sizes.isDisplayMode {
+                Button("Set reference", action: model.setReference)
+                    .buttonStyle(.borderedProminent)
+                ReferenceMenu(model: model)
+            }
         }
         .opacity(text.isDimmed ? 0.5 : 1)
-        .padding(.horizontal, 8)
+        .padding(.horizontal, sizes.isDisplayMode ? 20 : 8)
         .padding(.vertical, 6)
+        .background(.primary.opacity(0.05))
     }
 }
 
-/// Clear, Save as and Snapshots, with the reference's status and errors.
+/// The last Set reference's outcome, or the snapshot store's error.
+struct ReferenceStatus: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        if let error = model.snapshotError {
+            Text(error).foregroundStyle(.red).lineLimit(1)
+        } else {
+            Text(model.referenceStatus).foregroundStyle(.secondary).lineLimit(1)
+        }
+    }
+}
+
+/// Clear, Save as and Snapshots.
 struct ReferenceMenu: View {
     @ObservedObject var model: AppModel
     @State private var isNaming = false
@@ -90,11 +110,6 @@ struct ReferenceMenu: View {
                 Button("Snapshots\u{2026}") { isShowingSnapshots = true }
             }
             .fixedSize()
-            if let error = model.snapshotError {
-                Text(error).foregroundStyle(.red).lineLimit(1)
-            } else {
-                Text(model.referenceStatus).foregroundStyle(.secondary).lineLimit(1)
-            }
         }
         .alert("Save reference as", isPresented: $isNaming) {
             TextField("Song \u{2014} part", text: $draftName)

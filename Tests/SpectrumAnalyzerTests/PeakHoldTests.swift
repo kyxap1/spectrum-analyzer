@@ -21,11 +21,11 @@ struct PeakHoldTests {
         #expect(hold.points == Self.curve(-20))
     }
 
-    @Test("a falling curve is held for 1.5 s, then falls 20 dB per second, never below the curve")
+    @Test("a falling curve is held for 3 s, then falls 20 dB per second, never below the curve")
     func holdsThenFalls() {
         var hold = PeakHold()
         hold.update(with: Self.curve(-20), elapsedSeconds: 1.0 / 30)
-        #expect(Self.run(&hold, -60, seconds: 1.4) == -20)
+        #expect(Self.run(&hold, -60, seconds: 2.9) == -20)
         let afterHalfSecondOfFall = Self.run(&hold, -60, seconds: 0.6)
         #expect(abs(afterHalfSecondOfFall - -30) < 1)
         #expect(Self.run(&hold, -60, seconds: 5) == -60)
@@ -35,9 +35,9 @@ struct PeakHoldTests {
     func newPeakRestartsHold() {
         var hold = PeakHold()
         hold.update(with: Self.curve(-20), elapsedSeconds: 1.0 / 30)
-        _ = Self.run(&hold, -60, seconds: 2)
+        _ = Self.run(&hold, -60, seconds: 4)
         hold.update(with: Self.curve(-25), elapsedSeconds: 1.0 / 30)
-        #expect(Self.run(&hold, -60, seconds: 1.4) == -25)
+        #expect(Self.run(&hold, -60, seconds: 2.9) == -25)
     }
 
     @Test("after a reset, as after a scrub or Reset, the hold restarts from the live curve")

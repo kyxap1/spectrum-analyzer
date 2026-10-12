@@ -150,5 +150,14 @@ struct ReferenceTests {
         let reference = try #require(Reference.make(guitar: guitar, mix: BandLog.average([]), windowSeconds: 10))
         #expect(reference.activeSeconds == 6)
         #expect(reference.mixBands == nil)
+        #expect(!reference.isFull)
+    }
+
+    @Test("a reference from its full window is fit for advice (R25)")
+    func fullReference() throws {
+        let flat = [Float](repeating: 1, count: bandCount)
+        let guitar = BandLog.average((0..<20).map { hop(sequence: $0, bands: flat) })
+        let reference = try #require(Reference.make(guitar: guitar, mix: BandLog.average([]), windowSeconds: 10))
+        #expect(reference.isFull)
     }
 }

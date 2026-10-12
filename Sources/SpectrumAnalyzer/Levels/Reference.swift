@@ -38,6 +38,10 @@ struct Reference: Codable, Equatable {
     var guitarCrestDB: Float?
     var guitarOctaveCrestDB: [Float]?
 
+    /// R25: a reference from fewer active seconds than its window gives no
+    /// advice. Set reference never makes one; older snapshots may hold one.
+    var isFull: Bool { activeSeconds >= Double(windowSeconds) }
+
     /// Nil when the guitar window holds no active hop.
     static func make(guitar: ActiveWindow, mix: ActiveWindow, windowSeconds: Int, name: String? = nil) -> Reference? {
         guard !guitar.hops.isEmpty else { return nil }
