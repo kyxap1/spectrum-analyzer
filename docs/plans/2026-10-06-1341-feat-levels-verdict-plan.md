@@ -14,7 +14,7 @@ execution: code
 ## Goal Capsule
 
 - **Objective:** While setting up pedals, the user sees at a glance whether the rig is at unity and whether the tone matches the reference, without reading deltas. The screen stays still and shows a check mark when nothing needs changing. The analyzer is light enough to leave running.
-- **Means:** the app acts as a measuring instrument. It shows differences against the reference in action steps, splits the graph into a spectrum pane and a difference pane, and draws the curves outside the per-frame SwiftUI `Canvas` (KTD1, KTD5, KTD7).
+- **Means:** the app acts as a measuring instrument. It shows differences against the reference in action steps, keeps one readable spectrum graph with a tone row on the first level and the extra graphs in Details, and draws the curves outside the per-frame SwiftUI `Canvas` (KTD1, KTD5, KTD7).
 - **Product authority:** this Product Contract. It extends `docs/plans/2026-10-06-0450-feat-pedal-setup-tools-plan.md`, whose Key Decisions and KTDs still hold unless a decision here replaces them; that plan's KTDs are cited as "pedal plan KTD<N>". It takes over the topics of `docs/plans/2026-10-06-render-performance-stub.md`. The side topics in `docs/plans/2026-10-06-agent-tuning-stub.md` are not active scope.
 - **Stop conditions:** stop and ask if a requirement would need code inside an IOProc block (pedal plan KTD4's real-time rules), a network listener reachable from another machine, or saved audio. Stop if R22 is still missed after the layer-backed renderer and one profiling pass; a Metal renderer then needs the user's go-ahead.
 - **Execution profile:** ten units, dependency-ordered (see Sequencing), shipped as one pull request. Pure logic is test-first with Swift Testing; the renderer, the tablet and CPU need the manual checks in the Verification Contract.
@@ -30,7 +30,7 @@ execution: code
 ### Summary
 
 The levels panel becomes one verdict strip: unity by loudness in 2 dB steps, tone by octave in 1 dB steps, and a check mark when nothing needs changing.
-The graph splits into a spectrum pane with the reference as a corridor and a difference pane with per-octave step counts; a loudness history strip sits below.
+One spectrum graph shows guitar and mix with the reference as a corridor, and a tone row under it carries the per-octave step counts; a difference pane and a loudness history strip sit in Details.
 Everything else moves into collapsed Details or a Settings window on ⌘,.
 The app reports measurements only and never picks a device or knob; the AI advice gives physical knob moves as clock positions.
 Steady Live CPU drops to 5% or less.
@@ -57,7 +57,8 @@ The AI advice gives physical knob changes in dB with a clock position in bracket
 - **Tone is compared after level matching.** Each octave's difference has the loudness difference removed, so a level offset shows only in the unity verdict and the columns show the spectral shape alone. REFERENCE 2 level-matches by loudness before its level line for the same reason. Governs R7, R8, R13.
 - **The held peak is replaced by average peak and crest, with a clipping warning on the first level.** (session-settled: user-approved — chosen over keeping the held peak in Details and over average peak alone: crest shows how much a pedal squashes dynamics, which the held peak never could.) Governs R5, R6, R16.
 - **Layout A: the verdict strip sits above the graph.** (session-settled: user-directed — chosen over a verdict card beside the graph and over a verdict-first screen with the graph collapsed, after a visual sketch of all three.) Governs R15.
-- **Two panes instead of two scales on one graph; the difference pane shows a curve over octave columns.** (session-settled: user-approved — chosen over one graph, over a curve alone and over columns alone.) Governs R11, R12, R13.
+- **One spectrum graph and a tone row on the first level; the difference pane and the history strip in Details.** (session-settled: user-directed, 2026-10-06 rework after seeing U1-U5 live — replaces the earlier two-pane first level, which was unreadable; chosen over keeping both panes on the first level and over dropping the extra graphs.) Governs R8, R11, R13, R14, R15, R16.
+- **Set reference refuses a partial window.** (session-settled: user-directed, 2026-10-06 — chosen over accepting it with a warning: a reference from 7 s of noise gave confident wrong advice.) Governs R25.
 - **Lessons from existing tools: reference corridor, loudness history and crest per octave.** These come from iZotope Tonal Balance Control, Youlean Loudness Meter 2 and Mastering The Mix REFERENCE 2. (session-settled: user-directed — the user took these three and rejected Tonal Balance Control's four broad zones: the rig is tuned with ten EQ2 bands, so ten octaves stay the default.) Governs R12, R14, R16.
 - **The app is an instrument; decisions live outside it.** Pre-amp EQ2 sits before the drives and the ENGL preamp, so its effect on the output is nonlinear and only a closed measurement loop can choose between the two EQ2 units. That logic belongs in a portable skill, not in app code. (session-settled: user-directed — chosen over rule-based pre-amp/post-cab hints in the app.) Governs R10, R23.
 - **Physical knob moves are clock positions only.** (session-settled: user-directed — chosen over dB with a knob position and over the pedal's printed scale: printed scales differ per pedal, 0-10 on one and 0-12 on another.) Governs R19.
@@ -79,23 +80,24 @@ The AI advice gives physical knob changes in dB with a clock position in bracket
 **Tone**
 
 - R7. Tone is compared per standard octave band (the 10 EQ2 factory bands), level-matched by the loudness difference, in 1 dB steps that can be changed in Settings, following R24.
-- R8. Above each octave column of the difference pane that is out by at least one step, a signed whole-dB number shows the difference against the reference ("+2" means 2 dB above). Columns within tolerance show nothing. Nothing is colour-highlighted.
+- R8. A tone row under the spectrum's frequency axis carries one cell per octave, on the octave centre. A cell out by at least one step shows a signed whole-dB number against the reference ("+2" means 2 dB above); a cell within tolerance stays blank. The row is labelled "vs ref … dB" and is empty without a reference. Nothing is colour-highlighted.
 - R9. The verdict strip carries a tone status: "Tone ✓" or "Tone: N bands".
-- R10. Hovering a column with the mouse, or tapping it on the tablet, opens a short popup with the band and the same figure its column carries: the difference against the reference in whole dB, or that the band is within tolerance. The popup names no device, EQ2 unit, knob or action.
+- R10. Hovering a tone-row cell with the mouse, or tapping it on the tablet, opens a short popup with the band and the same figure the cell carries: the difference against the reference in whole dB, or that the band is within tolerance. The popup names no device, EQ2 unit, knob or action.
 
 **Graph**
 
-- R11. The graph has two panes that share the frequency axis: a spectrum pane on one dBFS scale and a difference pane centred on 0 dB.
-- R12. The spectrum pane shows the live guitar and the reference as a corridor of ± one tone step. Two toggles add the mix as a dim curve and a peak-hold shadow of the guitar that holds for about 1-2 s and then falls. Both toggles are off by default.
-- R13. The difference pane shows guitar minus reference, level-matched as in R7, as a curve over the 10 octave columns. Without a reference, it shows guitar minus mix as today.
-- R14. A narrow strip shows the guitar's loudness over the last minutes with the reference level as a line.
+- R11. The first level has one spectrum graph. Its title and legend sit in a header row above the plot, its dB labels in a left gutter and its Hz labels in a bottom gutter, so no label lies under a curve. Its scale follows KTD8.
+- R12. The spectrum graph always shows the live guitar and the mix together, and the reference as a corridor of ± one tone step when one is set. A toggle, off by default, adds a peak-hold line of the guitar that holds for about 1-2 s and then falls. Every curve has its own colour in one dark theme.
+- R13. A difference pane in Details shows guitar minus reference, level-matched as in R7, with a title and labelled axes. It shows only while a reference is set, and is blank where the guitar or the reference is below the spectrum range.
+- R14. A loudness history strip in Details shows the guitar's loudness over the last 5 minutes with the reference level as a line, with a title, dB labels and time labels from −5m to now.
 
 **Layout and settings**
 
-- R15. Normal mode reads from top to bottom: the verdict strip with Set reference as its primary button, the two graph panes, the loudness history strip, collapsed Details, the transport, and the AI advice.
-- R16. Details is collapsed by default. It holds third-octave differences, input meters, average peak, crest overall and per octave against the reference, and window progress.
+- R15. Normal mode reads from top to bottom: the verdict strip with Set reference as its primary button, the spectrum graph with its tone row, collapsed Details, the transport, and the AI advice.
+- R16. Details is collapsed by default. It holds the difference pane, the loudness history strip, octave differences, input meters, average peak, crest overall and per octave against the reference, and window progress.
 - R17. A standard macOS Settings window opens with ⌘, and from a ⚙ button. It holds the activity thresholds with Learn noise, the window N, the unity and tone steps, and the export toggle.
-- R18. Display Mode shows the verdict strip, the difference pane and the loudness history strip in large type, plus the spectrum pane when toggled on. Popups open on tap.
+- R18. Display Mode shows the verdict strip and the spectrum graph with its tone row in large type. Popups open on tap. (To confirm with the user before U8: the 2026-10-06 rework settled the normal layout only.)
+- R25. Set reference needs a full window: with fewer than N active seconds it is refused with "Need 20 s of playing, have 7", and the reference stays as it was. A loaded snapshot shorter than its own window gives no advice; the verdict reads "Reference too short — set it again".
 
 **Advice wording**
 
@@ -122,7 +124,7 @@ The AI advice gives physical knob changes in dB with a clock position in bracket
 - AE6. **Covers R7, R9.** **Given** a reference, **when** the guitar plays 3 dB louder with the same tone, **then** the verdict reads "louder → turn down" and the tone status reads "Tone ✓".
 - AE7. **Covers R3, R24.** **Given** N = 10 s, a 2 dB unity step and playing at unity, **when** the level steps up 6 dB, **then** "louder" shows after about 2 s of active playing. **When** the level returns, **then** "Unity ✓" shows after about 9.5 s. A 6 dB cut shows "quieter" after about 5 s and returns to "Unity ✓" after about 7.5 s. These follow from a sliding power average; N = 5 s halves them.
 - AE3. **Covers R4, R9.** **Given** no reference, **then** the verdict asks the user to play and press Set reference, and no tone status shows.
-- AE4. **Covers R10, R18.** **Given** Display Mode on the tablet, **when** the user taps the 125 column, **then** a popup reads "125 Hz: −3 dB against the reference" and names no pedal.
+- AE4. **Covers R10, R18.** **Given** Display Mode on the tablet, **when** the user taps the 125 cell of the tone row, **then** a popup reads "125 Hz: −3 dB against the reference" and names no pedal.
 - AE5. **Covers R21.** **Given** a snapshot saved before this change, **when** it is loaded, **then** the unity verdict and the tone numbers work, and the crest line stays hidden.
 
 ### Success Criteria
@@ -176,11 +178,11 @@ This plan owns the measurement and display side of the analyzer. The breakdown b
 - KTD4. **Raw differences come from the full window; spread is reported, never gated on.** Each figure is unknown until the live window holds N active seconds, and the strip shows window progress meanwhile (R4). The unity raw difference is the window's loudness minus the reference loudness, both from power-averaged bands (KTD1). A tone column's raw difference is the octave's level difference minus that loudness difference, so tone is level-matched. Each figure's spread, the sample standard deviation of its per-hop differences, goes to the export as information, as EBU loudness range reports spread beside loudness. (session-settled: user-directed — 2026-10-06 doc review replaced the earlier spread gate, which had been chosen over showing every difference of two or more steps: no reference-matching tool gates on per-hop spread, and the spread reflects which notes a hop caught, not the rig.) Governs R4, R7, R20, R24.
 - KTD5. **A step gate turns a raw difference into a held step count.** Entering a non-zero count needs a full step. Leaving to zero needs less than half a step. A held count k moves to the nearest count only when the raw difference in steps is at least 0.75 from k, which stops flicker at 1.5 steps. The strip shows steps multiplied by the step size, so the unity figure reads +2 or +4 dB, never a free whole-dB value. The gate advances once per new log hop, not once per UI tick, so the same hop series gives the same answer. The crest line reuses the gate with a 2 dB step. Changing a step setting, Reset, Set reference or loading a snapshot clears every held count. (session-settled: user-directed — hysteresis kept; chosen over plain rounding to the nearest step, which flickers at the boundary. session-settled: user-directed — the small dB figure under the unity verdict stays as a measurement, chosen over a verdict with no dB on screen.) Governs R2, R3, R5, R7, R24.
 - KTD6. **One `VerdictTracker`, owned by `AppModel`, feeds the screen and the export.** It takes the comparison and the per-hop series and produces a value `Verdict`: the unity figure, ten tone figures, the crest figure, window progress and the step sizes in use. The screen reads the value from `LiveLevels`; the export document is built from the same value. It holds the held counts (KTD5) and nothing else, so it stays testable without audio. Governs R20, R24.
-- KTD7. **The graph is a layer-backed `NSView` hosted in SwiftUI; the 30 Hz path never touches SwiftUI state.** Grid, curves, corridor, peak-hold shadow and columns are `CAShapeLayer` and `CATextLayer` sublayers of one view, so both panes share the x axis. `AppModel.tick` hands each frame straight to the view, which replaces layer paths with implicit animations off. `LiveCurves` stops being an `ObservableObject`. The history strip updates only when a hop lands (2 Hz) and stays a SwiftUI `Canvas` in its own view. A `CAMetalLayer` renderer is out unless the stop condition in the Goal Capsule fires. The 18% has not been profiled, a 15 Hz publish gave no gain, and `tick` also refreshes the device list and runs two permission checks every frame. So one `sample` profile of the current bundle in steady Live comes first: the layer-backed renderer goes ahead only if frames under the graph `Canvas` dominate; otherwise U1 first removes the dominant per-tick cost and the renderer waits behind the stop condition. Governs R11, R22.
-- KTD8. **Pane geometry.** The spectrum pane keeps today's dBFS scale (floor −100 dB, grid 0 to −80 dB). The difference pane is centred on 0 dB with ±12 dB at its edges and clamps beyond, matching the bars it replaces. The panes split the height 60 / 40, share the 10 octave gridlines and labels, and the 10 columns sit on the octave centres, each as wide as one octave on the log axis. Governs R11, R13.
-- KTD9. **Corridor and peak-hold constants.** The corridor is the reference's display curve, shifted by the loudness difference so it is level-matched like the columns, plus and minus the tone step, drawn as a filled band at least 4 pt thick: on the 100 dB spectrum scale ±1 dB is about 2 pt and would read as a line. Its true bounds stay ± the tone step. The peak-hold shadow follows the live guitar display curve upward at once, holds 1.5 s, then falls 20 dB per second, per display point. Both toggles and the mix curve toggle are remembered and off by default. Governs R12.
+- KTD7. **The graph is a layer-backed `NSView` hosted in SwiftUI; the 30 Hz path never touches SwiftUI state.** Grid, curves, corridor, peak-hold shadow and columns are `CAShapeLayer` and `CATextLayer` sublayers of one view, so both panes share the x axis. `AppModel.tick` hands each frame straight to the view, which replaces layer paths with implicit animations off. `LiveCurves` stops being an `ObservableObject`. The history strip updates only when a hop lands (2 Hz) and is its own layer-backed `NSView` fed through a `LiveSink`, like the graph. A `CAMetalLayer` renderer is out unless the stop condition in the Goal Capsule fires. The 18% has not been profiled, a 15 Hz publish gave no gain, and `tick` also refreshes the device list and runs two permission checks every frame. So one `sample` profile of the current bundle in steady Live comes first: the layer-backed renderer goes ahead only if frames under the graph `Canvas` dominate; otherwise U1 first removes the dominant per-tick cost and the renderer waits behind the stop condition. Governs R11, R22.
+- KTD8. **The spectrum reads in plain dBFS on a fixed scale, and nothing is set by hand.** Each of the ~240 log-spaced points is the loudest FFT bin in its bucket, so harmonics keep their peaks, scaled by the Hann window's noise bandwidth (1.5) so a sine reads its own level: a −12 dBFS sine peaks at −12 dBFS, less up to 1.42 dB of scalloping. There is no display tilt and no autoscale: the range is 0 to −90 dBFS (90 dB is Pro-Q 4's default range) with a line every 10 dB. The activity threshold gates the verdict and the reference, never the curve. A point outside the range lies on its edge, so a curve never breaks or flickers at the bottom. The difference pane (Details) is fixed at ±12 dB with a line every 6 dB, and a point is drawn only where both curves are inside the spectrum range. The per-octave figures that map onto the EQ2 sit in the tone row (R8), not in the curve. Labels sit in gutters outside each plot: dB on the left, Hz under the spectrum. (session-settled: user-directed, after trying them live: a 4.5 dB/oct tilt with a floating top was rejected because the scale jumped and its units mapped to nothing; a third-octave RTA was rejected because it averaged away the peaks.) Governs R11, R13.
+- KTD9. **Corridor and peak-hold constants.** The corridor is the reference's display curve, shifted by the loudness difference so it is level-matched like the columns, plus and minus the tone step, drawn as a filled band at least 4 pt thick so it never reads as a line. Its true bounds stay ± the tone step. The peak-hold line follows the live guitar display curve upward at once, holds 1.5 s, then falls 20 dB per second, per display point; like SPAN's secondary spectrum it is drawn in a darker shade of the guitar's colour, as a line, never a fill. The toggle is remembered and off by default. Colours on one dark background: guitar cyan, peak hold dark cyan, mix orange, reference corridor purple, difference green. Governs R12.
 - KTD10. **Clipping warning: an input whose 1 s peak reaches −1 dBFS latches the warning for 3 s.** Both the guitar and the mix input are watched, and the warning names which. The latch lives in `LiveLevels` and ticks with the 10 Hz meter refresh; the shown meter peak is the plain 1 s peak, no longer held. Governs R6.
-- KTD11. **The loudness history strip shows the last 5 minutes of the guitar log.** Each hop plots its K-weighted loudness (KTD1); hops below the threshold plot dim, the reference loudness is a horizontal line, and Reset empties the strip with the log. The vertical axis is fixed, never auto-scaled, so the strip holds still: with a reference it spans ±12 dB around the reference line and clamps beyond; without one it spans −48 to 0 dB. The strip fills from the left and then scrolls. Governs R14.
+- KTD11. **The loudness history strip shows the last 5 minutes of the guitar log.** Each hop plots its K-weighted loudness (KTD1); active hops join into a line, hops below the threshold and a lone active hop are not drawn, the reference loudness is a horizontal line, and Reset empties the strip with the log. The vertical axis is fixed, never auto-scaled, so the strip holds still: with a reference it spans ±12 dB around the reference line and clamps beyond; without one it spans −48 to 0 dB. The newest hop sits at the right edge under "now"; time labels −5m to −1m and dB labels sit in gutters, the title "Loudness, last 5 min" above, on the spectrum's dark background. Governs R14.
 - KTD12. **`Reference` drops the held peak and gains optional average peak, crest and per-octave crest.** Synthesised `Codable` ignores the removed key and leaves new optionals nil, so old snapshot files decode unchanged and `SnapshotStore` needs no migration. Loudness is never stored; it is derived from `guitarBands` (KTD1). Governs R6, R21.
 - KTD13. **Settings is a SwiftUI `Settings` scene sharing the `AppModel` instance.** One form view serves the scene and the More sheet in display mode. Step sizes are whole dB, unity 1 to 6 (default 2), tone 1 to 3 (default 1), stored in `UserDefaults`. Set reference, Save as and Snapshots sit in the verdict strip, with Save as and Snapshots under a Reference menu. Governs R3, R7, R15, R17.
 - KTD14. **Export version 2 adds a `verdict` object and keeps the document extensible.** The verdict object carries the unity figure, the ten tone figures (raw difference, spread, steps), the crest figure, window progress and the step sizes in use; spread is information, not a gate (KTD4). Per-source sections gain loudness and average peak; the reference gains loudness, average peak and crest; the reference's held `peakDBFS` is removed, and each source's `peakDBFS` is documented as the 1 s peak. A reference loaded from an old snapshot reports null for what it lacks. Governs R20, R21.
@@ -202,7 +204,7 @@ flowchart TB
   WIN --> CMP
   CMP --> TRK[VerdictTracker: step gate]
   TRK --> STRIP[Verdict strip and tone status]
-  TRK --> COLS[Difference columns and numbers]
+  TRK --> COLS[Tone row numbers]
   TRK --> EXP[Export document v2]
   LOG --> HIST[Loudness history strip]
   MET --> CLIP[Clip latch]
@@ -229,12 +231,11 @@ Normal-mode composition (R15):
 ```mermaid
 flowchart TB
   S[Verdict strip: direction, small dB, crest line, tone status, clip warning, Set reference, Reference menu, gear]
-  G[Graph view: spectrum pane above difference pane with columns]
-  H[Loudness history strip]
-  D[Details: collapsed]
+  G[Spectrum graph: header legend, gutters, tone row under the Hz axis]
+  D[Details, collapsed: difference pane, loudness history strip, octave figures, meters]
   T[Transport]
   A[AI advice]
-  S --> G --> H --> D --> T --> A
+  S --> G --> D --> T --> A
 ```
 
 ### Sequencing
@@ -246,7 +247,7 @@ flowchart TB
   U3 --> U4[U4 Steps and verdict]
   U4 --> U5[U5 Verdict strip and layout]
   U1 --> U5
-  U4 --> U6[U6 Columns, numbers, popups]
+  U4 --> U6[U6 Tone row popups]
   U1 --> U6
   U4 --> U7[U7 Settings window]
   U5 --> U7
@@ -302,7 +303,7 @@ U1, U2 and U10 start independently. U1 comes first because it carries the CPU st
 | U3 | Loudness and comparison | `Levels/Loudness.swift`, `Levels/Reference.swift` | U2 |
 | U4 | Steps and verdict | `Levels/Verdict.swift` | U3 |
 | U5 | Verdict strip and layout | `UI/VerdictStrip.swift`, `UI/HistoryStrip.swift`, `UI/LevelsPanel.swift` | U1, U4 |
-| U6 | Columns, numbers and popups | `UI/GraphLayerView.swift`, `UI/SpectrumGraph.swift` | U1, U4 |
+| U6 | Tone row popups | `UI/GraphLayerView.swift`, `UI/SpectrumGraph.swift` | U1, U4 |
 | U7 | Settings window | `UI/SettingsView.swift`, `App/SpectrumAnalyzerApp.swift` | U4, U5 |
 | U8 | Display mode | `UI/DisplayMode.swift` | U5, U6, U7 |
 | U9 | Export v2 | `Export/LevelsDocument.swift`, `README.md` | U3, U4 |
@@ -329,37 +330,27 @@ How the implementation differs from the units below. Later units build on what t
 
 ### Prerequisite before any further unit: rework the graphs
 
-**Status.** U1-U5 implement R11-R15, KTD8 and KTD11 as written, and the result is unreadable on a live signal. Do not start U6-U10 until this section is resolved with the user and the Product Contract and units below are revised to match.
+**Status.** Resolved with the user on 2026-10-06: R8, R10-R16, R18, R25, KTD7 (history strip), KTD8, KTD9, KTD11 and units U6 and U8 are revised above and below. The rework below lands before U6-U10, then the user looks at it live.
 
-**Where the layout came from.** The committed seed `docs/plans/2026-10-06-render-performance-stub.md` ("Levels UI") put only three things on the first level: one verdict in words, the 10 octave bars with a one-line tone summary, and one primary Set button. Meters, peaks, average peak, crest and window progress went into Details. This plan then added two graph panes and a loudness history strip to the first level (R11, R14, R15). The user expected extra graphs to stay in Details until wanted. The first level shows them instead.
+**Why.** U1-U5 put two graph panes and a history strip on the first level (the old R11, R14, R15), against the committed seed `docs/plans/2026-10-06-render-performance-stub.md`, which kept extra graphs in Details. On a live signal (guitar from the MacBook microphone, mix from YouTube, a reference from 7 s of microphone noise) the result was unreadable:
 
-**What the user saw.** The first level is a mash of graphs crammed into one big graph. The curves flatten against their limits and carry no meaning, labels are overlapped, and dots run along the bottom for no visible reason. The user cannot tell what to do with any of it. The defects behind this are listed below. The screenshot is from 2026-10-06, with the guitar from the MacBook microphone, the mix from YouTube, and a reference set from 7 s of microphone noise.
+1. The spectrum pane was mostly empty: a fixed 0 to −80 dB grid with a −100 dB floor put the input in the bottom third, and above 1 kHz the guitar lay flat on the floor. Per-bin power with no tilt puts broadband signals far below their RMS.
+2. The mix at the floor read as a pane divider.
+3. Peak hold and the reference corridor were both teal shadows.
+4. The difference pane clamped at ±12 dB, and where both curves sat on the floor it showed minus the loudness difference, a pure offset (verified from `GraphFrame`), as a flat shelf above 4 kHz.
+5. Curves crossed axis labels.
+6. The history strip was a grey band of unlabelled dots under the frequency axis.
+7. The verdict advised from a partial reference taken from noise.
+8. The visual check judged block order, not readability.
 
-1. **The spectrum pane is mostly empty.** KTD8 fixes it at 0 to −80 dB with a −100 dB floor. A real input at −60 to −90 dB sits in the bottom third, and above 1 kHz the guitar lies flat on the floor.
-2. **The mix curve reads as a pane divider.** At the floor it is a flat orange line on the boundary between the panes, while the legend still lists Mix.
-3. **Peak hold and Reference cannot be told apart.** Both are dark teal shadows behind the guitar, and their legend colours are almost the same.
-4. **The difference pane is clamped.** KTD8 clamps it at ±12 dB, so the curve runs off the bottom at 125 Hz and 250 Hz and lies as a flat shelf above 4 kHz. Where both signals are at the floor, the curve probably shows only the loudness offset, not tone; this is unverified. The pane is meant to be read through U6's columns and numbers, which do not exist yet, so a bare curve is all it shows.
-5. **Labels sit under the curves.** Curves cross the axis labels (−80 dB, +6, 125, 250), and the "Guitar − Reference" legend sits on its own line.
-6. **The history strip is unreadable.** It is a light grey band of 2 pt dots with no labels and no legend, placed directly under the frequency axis, so it reads as another frequency plot although its x axis is time. KTD11 fixed the axes; the dot style and the missing labels are the implementer's choice.
-7. **The verdict reads as advice it cannot back up.** "quieter → turn up −8 dB", "dynamics opened up by 6 dB" and "Tone: 9 bands" were computed against a partial reference taken from noise. Nothing on screen says the reference is unfit.
-8. **Visual verification was too shallow.** The render was checked only for block order, never judged for readability. Flat, clamped curves were already visible after U1 and were never raised with the user.
+**Rework (one commit, before U6).**
 
-**What the rework must deliver.** These are the user's demands plus the fixes for the defects above:
-
-- **First level.** It shows the verdict strip and the spectrum graph, with guitar and mix always together on one graph (memory rule). Anything else on the first level needs the user's explicit approval of a sketch first.
-- **Extra graphs.** The difference pane and the loudness history strip move into collapsed Details, or are dropped. The user decides which.
-- **No curve flattened at a scale limit.** The spectrum scale must fit the actual signal, for example a range that follows the signal with hold, or a floor tied to the threshold. A curve below the threshold or noise floor is not drawn, and neither is a difference where the guitar or the reference is below threshold.
-- **Labels never under curves.** Axis labels go in gutters outside the plot area. The legend goes outside the plot or in a reserved corner with a background.
-- **Every graph says what it shows.** It has a title or axis units. A time-based strip has time labels and is visually separated from any frequency axis.
-- **Distinct colours.** Each curve has its own colour, and the colours match one theme (no light grey band beside a dark graph).
-- **Silence instead of noise advice.** The verdict says the reference is unfit, rather than giving advice, when the reference or the live window is mostly below threshold.
-- **Visual checks judge readability.** They are done on a live signal with the in-app render, and every pane must answer "what does this tell the user to do". A plan-specified scale that yields flat or clamped curves is a stop: raise it with the user, do not implement around it.
-
-**Order of work for the next session.**
-
-1. With the user, revise R11-R16, R18, KTD7 (the history-strip part), KTD8 and KTD11, and units U5 (layout), U6 and U8. Use `ce-brainstorm` or a direct plan edit, and get the user's approval of a layout sketch before writing code.
-2. Rework `GraphLayerView`, `SpectrumGraph`, `HistoryStrip` and the layout in `ContentView` to match. Keep U2-U4's analysis code and U1's AppKit/`LiveSink` drawing path, which brought CPU down from about 10.7% to 3.6%.
-3. Verify with the live render and a re-measured CPU, then show the user before moving on to U6.
+- `SpectrumGraph.swift`: `GraphScale` holds the fixed ranges (KTD8) as pure functions with tests; points outside the range lie on its edge; the difference is computed only where both curves are in range.
+- `GraphLayerView.swift`: a plot rect inset by gutters; header row with title and legend; dB labels left, Hz labels below; the tone row under the Hz labels (R8, numbers from the held tone counts); colours per KTD9; the difference pane leaves this view.
+- `HistoryStrip.swift`: KTD11 as revised; the difference pane becomes its own small view in Details on the same drawing code path.
+- `LevelsPanel.swift` and `ContentView`: layout per R15 and R16.
+- `AppModel.setReference` and `VerdictText`: R25.
+- Verify on a live signal with the debug render, judge every graph by "what does this tell the user to do", re-measure CPU (R22), then show the user.
 
 **Local verification tooling.** These files are untracked and are never committed. If `Sources/SpectrumAnalyzer/_CctmpDebug.swift` is present, add `CctmpDebug.install(model: self)` at the end of `AppModel.init` and remove that line before each commit. The signals then do the following:
 
@@ -534,9 +525,9 @@ The user does not take screenshots and does not grant the terminal Screen Record
   - Silence below the threshold leaves the verdict unchanged; Pause or scrubbing keeps the last verdict greyed out with "Paused".
 - **Verification:** the scenarios pass; on the running app the order matches R15 and Details starts collapsed; steady Live CPU is re-measured per KTD17.
 
-### U6. Columns, numbers and popups
+### U6. Tone row popups
 
-- **Goal:** the difference pane shows octave columns with step numbers, and a column opens a popup on hover or tap.
+- **Goal:** a tone-row cell opens a popup on hover or tap. The row and its numbers land with the rework; U6 adds the hit-testing and the popup.
 - **Requirements:** R8, R10, R13, AE4. KTD5, KTD8.
 - **Dependencies:** U1, U4.
 - **Files:**
@@ -545,17 +536,14 @@ The user does not take screenshots and does not grant the terminal Screen Record
   - `Tests/SpectrumAnalyzerTests/GraphScaleTests.swift`
   - `Tests/SpectrumAnalyzerTests/ColumnPopupTests.swift` (new)
 - **Approach:**
-  1. With a reference, the difference pane draws the level-matched guitar-minus-reference curve over 10 columns on the octave centres, each column a bar of its level-matched octave difference; without a reference only the guitar-minus-mix curve shows and popups are off.
-  2. A column whose held count is non-zero gets a signed number above it, steps times the tone step; zero columns show nothing and nothing is coloured.
-  3. The view reports the column under the pointer on mouse move and on mouse down; a pure function maps x to a column and builds the popup text from the column's held figure, the same value its number shows.
-- **Patterns to follow:** `GraphScale.x(forHz:width:)` for column placement.
+  1. The view reports the tone-row cell under the pointer on mouse move and on mouse down; a pure function maps x to an octave and builds the popup text from the octave's held figure, the same value its number shows.
+  2. Without a reference no cell is hit-testable.
+- **Patterns to follow:** `GraphScale.x(forHz:width:)` for cell placement.
 - **Test scenarios:**
-  - An x position maps to the octave column whose band contains it, and positions outside the 10 octaves map to none.
-  - A held +2 steps at a 1 dB tone step labels its column "+2"; at a 2 dB step it labels "+4".
-  - Columns with a zero count carry no label and no highlight state.
-  - Covers AE4. Popup text for the 125 column holding −3 steps at a 1 dB tone step reads "125 Hz: −3 dB against the reference", with a true minus sign and no device name.
-  - The popup for a column with a zero count says the band is within tolerance and shows no dB figure.
-  - With no reference no column is hit-testable and no popup opens.
+  - An x position maps to the octave whose band contains it, and positions outside the 10 octaves map to none.
+  - Covers AE4. Popup text for the 125 cell holding −3 steps at a 1 dB tone step reads "125 Hz: −3 dB against the reference", with a true minus sign and no device name.
+  - The popup for a cell with a zero count says the band is within tolerance and shows no dB figure.
+  - With no reference no cell is hit-testable and no popup opens.
 - **Verification:** the scenarios pass; on the running app, hover opens the popup and a click opens it as well.
 
 ### U7. Settings window
@@ -582,7 +570,7 @@ The user does not take screenshots and does not grant the terminal Screen Record
 
 ### U8. Display mode
 
-- **Goal:** display mode shows the verdict strip, the difference pane and the history strip large, the spectrum pane on a toggle, and popups on tap.
+- **Goal:** display mode shows the verdict strip and the spectrum graph with its tone row large, and popups on tap. Confirm R18 with the user before starting.
 - **Requirements:** R18, AE4. KTD13.
 - **Dependencies:** U5, U6, U7.
 - **Files:**
@@ -591,15 +579,11 @@ The user does not take screenshots and does not grant the terminal Screen Record
   - `Sources/SpectrumAnalyzer/UI/GraphLayerView.swift`
   - `Tests/SpectrumAnalyzerTests/DisplayModeTests.swift`
 - **Approach:**
-  1. A pure function lists the visible regions for a layout: normal shows all, display shows the strip, the difference pane and the history strip, plus the spectrum pane when its remembered toggle is on.
-  2. `ContentView`'s display layout uses it; the spectrum toggle sits in the More sheet beside the shared settings form.
-  3. `DisplaySizes` grows the strip and column number fonts; the touch row keeps Pause, Resume live, Set reference, Reset and More. In display mode the strip drops its own Set reference, Reference menu and ⚙, which the touch row and More already carry, and keeps direction, dB, crest line, tone status and clip warning in large type.- **Patterns to follow:** `DisplayModeMemory` and `DisplaySizes`.
+  1. `ContentView`'s display layout shows the strip and the spectrum graph with its tone row.
+  2. `DisplaySizes` grows the strip and tone-row fonts; the touch row keeps Pause, Resume live, Set reference, Reset and More. In display mode the strip drops its own Set reference, Reference menu and ⚙, which the touch row and More already carry, and keeps direction, dB, crest line, tone status and clip warning in large type.- **Patterns to follow:** `DisplayModeMemory` and `DisplaySizes`.
 - **Test scenarios:**
-  - Display layout without the spectrum toggle lists strip, difference pane and history strip only.
-  - With the toggle on, the spectrum pane is added above the difference pane.
-  - The spectrum toggle persists across a new model instance.
   - The display-mode strip has no Set reference, Reference menu or ⚙, and the touch row still has Set reference.  - Existing screen-memory scenarios for display mode still pass.
-- **Verification:** the scenarios pass; on the tablet, the verdict reads from about 2 m and a tap on a column opens the popup.
+- **Verification:** the scenarios pass; on the tablet, the verdict reads from about 2 m and a tap on a tone-row cell opens the popup.
 
 ### U9. Export v2
 
@@ -655,7 +639,7 @@ The user does not take screenshots and does not grant the terminal Screen Record
 | CI | `.github/workflows/ci.yml` runs `swift test` and `scripts/bundle.sh` on the pull request | all |
 | CPU | KTD17 on the built bundle: after U1 (stop condition) and at the end with every pane visible, Live, steady input; numbers go in the pull request | U1, U5, final |
 | Rig run | F1 from the pedal plan on the real rig: Learn noise, Set reference, switch a pedal on, turn to "Unity ✓"; check the figures hold still on steady playing, note any false check mark, and time how long "Unity ✓" takes to return after a level correction against AE7 | U2-U6 |
-| Tablet | Display mode through Side Screen: verdict readable from about 2 m, tap on a column opens the popup | U6, U8 |
+| Tablet | Display mode through Side Screen: verdict readable from about 2 m, tap on a tone-row cell opens the popup | U6, U8 |
 | Settings | ⌘, and ⚙ open the window on the bundle; step changes alter the verdict | U7 |
 | Export | `curl http://127.0.0.1:47800/levels` returns version 2 and a verdict that matches the screen | U9 |
 | AI request | One real recommendation: clock positions for rotary knobs, whole dB for EQ2 bands | U10 |
