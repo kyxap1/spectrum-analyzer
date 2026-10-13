@@ -1,3 +1,4 @@
+import Darwin
 import Testing
 @testable import SpectrumAnalyzer
 
@@ -45,25 +46,64 @@ struct LevelMeterTests {
     }
 }
 
-@Suite("LevelReading")
-struct LevelReadingTests {
-    @Test("the peak is held while RMS falls at a limited rate")
-    func releases() {
-        let loud = LevelReading(rmsDBFS: -10, peakDBFS: -3)
-        let quiet = LevelReading(rmsDBFS: -40, peakDBFS: -30)
-        #expect(loud.shown(after: quiet, seconds: 0.1) == loud)
-        let fallen = quiet.shown(after: loud, seconds: 0.5)
-        #expect(abs(fallen.rmsDBFS - -22) < 0.001)
-        #expect(fallen.peakDBFS == -3)
+/// Feeds `seconds` of a ring to the ballistics in ticks of 1/30 s from `start`.
+private func feed(_ ballistics: inout MeterBallistics, _ ring: HistoryRing, from start: Int, seconds: Double) -> MeterDisplay? {
+    let block = rate / 30
+    var shown: MeterDisplay?
+    for tick in 0..<Int(seconds * 30) {
+        shown = ballistics.update(interleaved: ring.read(from: start + tick * block, count: block), seconds: 1.0 / 30)
+    }
+    return shown
+}
+
+@Suite("MeterBallistics")
+struct MeterBallisticsTests {
+    @Test("RMS reaches 65% of a step's power after 300 ms and settles on the true RMS")
+    func rmsResponse() {
+        let ring = HistoryRing(capacity: 4 * rate)
+        writeSine(ring, frequency: 440, amplitudeDBFS: -6, seconds: 3)
+        var ballistics = MeterBallistics()
+        let early = feed(&ballistics, ring, from: 0, seconds: 0.3)!
+        #expect(abs(early.rmsDBFS - (-9.03 + 10 * log10(0.65))) < 0.3)
+        let settled = feed(&ballistics, ring, from: rate * 3 / 10, seconds: 2.4)!
+        #expect(abs(settled.rmsDBFS - -9.03) < 0.1)
+        #expect(abs(settled.peakDBFS - -6) < 0.1)
     }
 
-    @Test("silence settles to minus infinity and the first reading is shown as is")
-    func silenceAndFirst() {
-        let silent = LevelReading(rmsDBFS: -.infinity, peakDBFS: -.infinity)
-        #expect(silent.shown(after: nil, seconds: 0.1) == silent)
-        let nearFloor = LevelReading(rmsDBFS: -119, peakDBFS: -119)
-        let settled = silent.shown(after: nearFloor, seconds: 1)
-        #expect(settled.rmsDBFS == -.infinity)
-        #expect(settled.peakDBFS == -119)
+    @Test("after a tone stops the peak falls at once and the marker holds 3 s, then drops to the fading RMS")
+    func peakAndHold() {
+        let ring = HistoryRing(capacity: 6 * rate)
+        writeSine(ring, frequency: 440, amplitudeDBFS: 0, seconds: 1)
+        ring.write(at: 6 * rate - 1, [0, 0])
+        var ballistics = MeterBallistics()
+        _ = feed(&ballistics, ring, from: 0, seconds: 1)
+        let afterStop = feed(&ballistics, ring, from: rate, seconds: 0.2)!
+        #expect(afterStop.peakDBFS < -25)
+        #expect(abs(afterStop.heldPeakIEC - 1) < 0.01)
+        let held = feed(&ballistics, ring, from: rate * 12 / 10, seconds: 1.7)!
+        #expect(abs(held.heldPeakIEC - 1) < 0.01)
+        let dropped = feed(&ballistics, ring, from: rate * 39 / 10, seconds: 2)!
+        #expect(dropped.heldPeakIEC < 0.5)
+    }
+
+    @Test("a tone followed by long silence reads minus infinity, never a huge negative number")
+    func silenceFloor() {
+        let ring = HistoryRing(capacity: 40 * rate)
+        writeSine(ring, frequency: 440, amplitudeDBFS: 0, seconds: 1)
+        ring.write(at: 40 * rate - 1, [0, 0])
+        var ballistics = MeterBallistics()
+        let shown = feed(&ballistics, ring, from: 0, seconds: 39)!
+        #expect(shown.rmsDBFS == -.infinity)
+        #expect(shown.peakDBFS == -.infinity)
+    }
+
+    @Test("the IEC 60268-18 scale matches Friture's breakpoints")
+    func iecScale() {
+        #expect(MeterBallistics.iec(0) == 1)
+        #expect(MeterBallistics.iec(-20) == 0.5)
+        #expect(MeterBallistics.iec(-60) == 0.025)
+        #expect(MeterBallistics.iec(-80) == 0)
+        #expect(MeterBallistics.iec(-.infinity) == 0)
+        #expect(MeterBallistics.iec(3) == 1)
     }
 }

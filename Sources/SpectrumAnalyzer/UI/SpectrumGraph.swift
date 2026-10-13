@@ -1,11 +1,13 @@
-import SwiftUI
+import Foundation
 
-/// Frequency-to-x and dB-to-y mapping for the graph (R5). Pure so it is
-/// testable without a live view.
+/// Frequency-to-x and dB-to-y mapping for the spectrum graph and the
+/// difference pane (R11, R13, KTD8). Pure so it is testable without a live view.
 enum GraphScale {
-    static let dbGridLines: [Float] = [0, -20, -40, -60, -80]
-    static let differenceSpanDB: Float = 30
-    static let differenceLabelValues: [Float] = [30, 15, 0, -15, -30]
+    /// KTD8: Friture's default spectrum range, fixed so a height reads the same at any moment.
+    static let spectrumRange: ClosedRange<Float> = -100 ... -20
+    static let spectrumGridStepDB: Float = 10
+    static let differenceRange: ClosedRange<Float> = -12 ... 12
+    static let differenceGridStepDB: Float = 6
     /// The 10 octave bands, which are the EQ2 factory bands.
     static let frequencyGridLines = OctaveBands.centerFrequencies
     static let frequencyGridLabels = OctaveBands.labels
@@ -16,145 +18,116 @@ enum GraphScale {
         return t * width
     }
 
-    static func y(forDB db: Float, height: Double) -> Double {
-        let floor = Double(SpectrumAnalyzer.displayFloorDB)
-        let clamped = max(Double(db), floor)
-        let t = (clamped - floor) / -floor
-        return height * (1 - t)
+    /// Top-down y within `height`, clamped to the range's edges so a curve
+    /// never breaks; nil only for a point with no value, which draws as a gap.
+    static func y(forDB db: Float, range: ClosedRange<Float>, height: Double) -> Double? {
+        guard db.isFinite else { return nil }
+        let t = Double((range.upperBound - db) / (range.upperBound - range.lowerBound))
+        return height * min(1, max(0, t))
     }
 
-    /// The difference curve's own scale: 0 dB at mid-height, +/-`differenceSpanDB`
-    /// at the edges, values beyond clamped.
-    static func y(forDifferenceDB db: Float, height: Double) -> Double {
-        let clamped = min(max(db, -differenceSpanDB), differenceSpanDB)
-        return height * (1 - (Double(clamped) / Double(differenceSpanDB) + 1) / 2)
+    /// The multiples of `step` inside `range`, top first.
+    static func gridLines(range: ClosedRange<Float>, step: Float) -> [Float] {
+        stride(from: (range.upperBound / step).rounded(.down) * step, through: range.lowerBound, by: -step).map { $0 }
     }
 
-    /// Guitar minus mix at each display point.
-    static func difference(guitar: [SpectrumPoint], mix: [SpectrumPoint]) -> [SpectrumPoint] {
-        zip(guitar, mix).map { SpectrumPoint(frequencyHz: $0.frequencyHz, db: $0.db - $1.db) }
+    /// The indices of the labels at `ys` (top first) that fit `labelHeight`
+    /// apart: both ends always, each one between only clear of its neighbours.
+    static func fittingLabels(_ ys: [Double], labelHeight: Double) -> [Int] {
+        guard let last = ys.indices.last, last > 0 else { return Array(ys.indices) }
+        var chosen = [0]
+        for i in 1..<last where ys[i] - ys[chosen[chosen.count - 1]] >= labelHeight && ys[last] - ys[i] >= labelHeight {
+            chosen.append(i)
+        }
+        return chosen + [last]
+    }
+
+    static func shifted(_ points: [SpectrumPoint], by offsetDB: Float) -> [SpectrumPoint] {
+        points.map { SpectrumPoint(frequencyHz: $0.frequencyHz, db: $0.db + offsetDB) }
+    }
+
+    /// `a` minus `b` per point where both are at or above `bottomDB`, else
+    /// -infinity (KTD8): a difference against a curve outside the range is noise.
+    static func difference(_ a: [SpectrumPoint], minus b: [SpectrumPoint], bottomDB: Float) -> [SpectrumPoint] {
+        zip(a, b).map {
+            SpectrumPoint(frequencyHz: $0.frequencyHz,
+                          db: $0.db >= bottomDB && $1.db >= bottomDB ? $0.db - $1.db : -.infinity)
+        }
     }
 
     /// The reference's display powers as a curve against the live guitar.
     static func points(of reference: Reference) -> [SpectrumPoint] {
-        zip(SpectrumAnalyzer.displayFrequencies, reference.guitarDisplay).map {
-            SpectrumPoint(frequencyHz: $0, db: dB($1, floor: SpectrumAnalyzer.displayFloorDB))
+        points(displayPower: reference.guitarDisplay)
+    }
+
+    /// Display powers, as the band log keeps them, as a curve.
+    static func points(displayPower: [Float]) -> [SpectrumPoint] {
+        zip(SpectrumAnalyzer.displayFrequencies, displayPower).map {
+            SpectrumPoint(frequencyHz: $0, db: SpectrumAnalyzer.pointDB($1))
         }
     }
 }
 
-/// One graph overlaying the mix and guitar curves on a log-frequency, dB axis
-/// (R5), redrawn as `points` changes. The optional difference curve reads
-/// against its own scale on the right edge; the reference curve shares the
-/// main dB scale so it compares directly with the live guitar.
-struct SpectrumGraphView: View {
-    @ObservedObject var curves: LiveCurves
-    var referencePoints: [SpectrumPoint]?
-    @Environment(\.displaySizes) private var sizes
-
-    var body: some View {
-        ZStack {
-            GraphGrid()
-            curveCanvas
-        }
-        .overlay(alignment: .topTrailing) { legend }
-        .background(Color.black.opacity(0.85))
+/// Everything the graph and the difference pane draw for one tick, pushed to
+/// the views through a `LiveSink` (KTD7).
+struct GraphFrame {
+    var guitar: [SpectrumPoint]?
+    var mix: [SpectrumPoint] = []
+    /// Nil while the peak-hold toggle is off.
+    var peakHold: [SpectrumPoint]?
+    var reference: [SpectrumPoint]?
+    /// Live loudness minus the reference's, which level-matches the corridor
+    /// and the difference curve.
+    var referenceOffsetDB: Float = 0
+    var toneStepDB: Float = 1
+    /// Held tone counts for the tone row (R8); nil until a full window.
+    var toneSteps: [Int]?
+    /// Tune: the window the curves average; nil in real-time.
+    var windowSeconds: Int?
+    /// The reference level-matched to the live guitar.
+    var drawnReference: [SpectrumPoint]? {
+        reference.map { GraphScale.shifted($0, by: referenceOffsetDB) }
     }
 
-    private var curveCanvas: some View {
-        Canvas { context, size in
-            drawCurve(curves.mix, color: .orange, context: context, size: size)
-            if let referencePoints {
-                drawCurve(referencePoints, color: .cyan.opacity(0.45), dash: [6, 4], context: context, size: size)
-            }
-            if let guitarPoints = curves.guitar {
-                drawCurve(guitarPoints, color: .cyan, context: context, size: size)
-            }
-            if let differencePoints = curves.difference {
-                drawCurve(differencePoints, color: .green, dash: [2, 3], context: context, size: size) {
-                    GraphScale.y(forDifferenceDB: $0, height: size.height)
-                }
-                drawDifferenceLabels(context: context, size: size)
-            }
-        }
-    }
-
-    private var legend: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Label("Mix", systemImage: "circle.fill").foregroundStyle(.orange)
-            if curves.guitar != nil {
-                Label("Guitar", systemImage: "circle.fill").foregroundStyle(.cyan)
-            }
-            if referencePoints != nil {
-                Label("Reference", systemImage: "circle.dashed").foregroundStyle(.cyan.opacity(0.6))
-            }
-            if curves.difference != nil {
-                Label("Guitar \u{2212} Mix", systemImage: "circle.dotted").foregroundStyle(.green)
-            }
-        }
-        .font(sizes.legend)
-        .padding(8)
-    }
-
-    private func drawDifferenceLabels(context: GraphicsContext, size: CGSize) {
-        for db in GraphScale.differenceLabelValues {
-            let y = GraphScale.y(forDifferenceDB: db, height: size.height)
-            context.draw(Text(String(format: "%+.0f", db)).font(sizes.axis).foregroundStyle(Color.green.opacity(0.7)),
-                         at: CGPoint(x: size.width - 6, y: min(max(y, 8), size.height - 8)),
-                         anchor: .trailing)
-        }
-    }
-
-    private func drawCurve(_ points: [SpectrumPoint], color: Color, dash: [CGFloat] = [], context: GraphicsContext, size: CGSize,
-                           y: ((Float) -> Double)? = nil) {
-        guard let first = points.first else { return }
-        let yFor = y ?? { GraphScale.y(forDB: $0, height: size.height) }
-        var path = Path()
-        path.move(to: CGPoint(x: GraphScale.x(forHz: first.frequencyHz, width: size.width), y: yFor(first.db)))
-        for point in points.dropFirst() {
-            path.addLine(to: CGPoint(x: GraphScale.x(forHz: point.frequencyHz, width: size.width), y: yFor(point.db)))
-        }
-        context.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: 1.5, dash: dash))
+    /// Guitar minus the level-matched reference, where both lie inside the
+    /// spectrum range (R13). Nil without a reference.
+    var difference: [SpectrumPoint]? {
+        guard let guitar, let reference = drawnReference else { return nil }
+        return GraphScale.difference(guitar, minus: reference, bottomDB: GraphScale.spectrumRange.lowerBound)
     }
 }
 
-/// The grid and its labels never change with the audio, so they sit in their
-/// own view with no changing input and are not redrawn on every frame.
-private struct GraphGrid: View {
-    @Environment(\.displaySizes) private var sizes
+/// KTD9: per display point, follows the guitar curve up at once, holds the
+/// peak for 3 s, then lets it fall 20 dB per second, never below the curve.
+struct PeakHold {
+    static let holdSeconds = 3.0
+    static let fallDBPerSecond: Float = 20
 
-    var body: some View {
-        Canvas { context, size in
-            drawGrid(context: context, size: size)
+    private(set) var points: [SpectrumPoint] = []
+    /// Seconds since each point last rose to a new peak.
+    private var ages: [Double] = []
+
+    mutating func update(with curve: [SpectrumPoint], elapsedSeconds: Double) {
+        guard points.count == curve.count else {
+            points = curve
+            ages = Array(repeating: 0, count: curve.count)
+            return
+        }
+        for i in curve.indices {
+            let previousAge = ages[i]
+            ages[i] += elapsedSeconds
+            let falling = ages[i] - max(previousAge, Self.holdSeconds)
+            var held = points[i].db - (falling > 0 ? Self.fallDBPerSecond * Float(falling) : 0)
+            if curve[i].db >= held {
+                held = curve[i].db
+                ages[i] = 0
+            }
+            points[i] = SpectrumPoint(frequencyHz: curve[i].frequencyHz, db: held)
         }
     }
 
-    private func drawGrid(context: GraphicsContext, size: CGSize) {
-        var grid = Path()
-        for hz in GraphScale.frequencyGridLines {
-            let x = GraphScale.x(forHz: hz, width: size.width)
-            grid.move(to: CGPoint(x: x, y: 0))
-            grid.addLine(to: CGPoint(x: x, y: size.height))
-        }
-        for db in GraphScale.dbGridLines {
-            let y = GraphScale.y(forDB: db, height: size.height)
-            grid.move(to: CGPoint(x: 0, y: y))
-            grid.addLine(to: CGPoint(x: size.width, y: y))
-        }
-        context.stroke(grid, with: .color(.white.opacity(0.15)))
-
-        // dB labels sit at the left edge, inside the canvas.
-        let style = Color.white.opacity(0.5)
-        for (hz, label) in zip(GraphScale.frequencyGridLines, GraphScale.frequencyGridLabels) {
-            context.draw(Text(label).font(sizes.axis).foregroundStyle(style),
-                         at: CGPoint(x: GraphScale.x(forHz: hz, width: size.width), y: size.height - 2),
-                         anchor: .bottom)
-        }
-        for db in GraphScale.dbGridLines {
-            let y = GraphScale.y(forDB: db, height: size.height)
-            context.draw(Text("\(Int(db)) dB").font(sizes.axis).foregroundStyle(style),
-                         at: CGPoint(x: 6, y: y + 2),
-                         anchor: .topLeading)
-        }
+    mutating func reset() {
+        points = []
+        ages = []
     }
 }

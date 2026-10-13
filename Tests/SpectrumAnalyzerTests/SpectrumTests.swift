@@ -10,7 +10,7 @@ private func nearestPoint(to frequency: Double, in points: [SpectrumPoint]) -> S
 
 @Suite("Spectrum")
 struct SpectrumTests {
-    @Test("a 1 kHz sine at -12 dBFS peaks near -12 dB at the nearest display point")
+    @Test("a 1 kHz sine at -12 dBFS peaks at -24 dB as in Friture, within the Hann window's 1.42 dB scalloping")
     func sinePeakLevel() {
         let ring = HistoryRing(capacity: SpectrumAnalyzer.fftSize * 2)
         writeSine(ring, frequency: 1_000, amplitudeDBFS: -12, seconds: Double(SpectrumAnalyzer.fftSize) / Double(rate))
@@ -19,8 +19,8 @@ struct SpectrumTests {
         let points = analyzer.advance(ring: ring, to: SpectrumAnalyzer.fftSize)
 
         let peak = points.max(by: { $0.db < $1.db })!
-        #expect(abs(peak.frequencyHz - 1_000) / 1_000 < 0.1)
-        #expect(abs(peak.db - (-12)) < 3)
+        #expect(abs(peak.frequencyHz - 1_000) / 1_000 < 0.03)
+        #expect(peak.db <= -24.04 + 0.1 && peak.db > -24.04 - 1.5)
     }
 
     @Test("20 Hz and 20 kHz map to the first and last display points, spacing is monotonic")

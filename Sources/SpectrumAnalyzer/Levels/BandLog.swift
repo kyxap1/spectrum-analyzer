@@ -1,15 +1,22 @@
-import Foundation
+import Accelerate
 
-/// One half-second measurement of a source: the 8192-frame window ending at
-/// `endFrame`, which is always a multiple of the hop length so two sources'
-/// hops at the same frame are the same moment.
+/// One half-second measurement of a source, ending at `endFrame`, which is
+/// always a multiple of the hop length so two sources' hops at the same frame
+/// are the same moment.
 struct LogHop {
     let sequence: Int
     let endFrame: Int
+    /// Over the hop's full 0.5 s (KTD2).
     let rmsDBFS: Float
     /// Power per third-octave band (31) and per display point (240).
     let bands: [Float]
     let display: [Float]
+    var peakDBFS: Float = -.infinity
+    /// Per octave (10), floored at `LogHop.floorDB` so a silent band stays finite.
+    var octavePeakDBFS: [Float] = []
+    var octaveMeanSquare: [Float] = []
+
+    static let floorDB: Float = -120
 }
 
 /// The newest active hops of a log, averaged in power.
@@ -21,6 +28,33 @@ struct ActiveWindow {
     let levelDBFS: Float
 
     var activeSeconds: Double { Double(hops.count) * Payload.hopSeconds }
+
+    /// KTD3: the mean of the hops' peaks in dB, so one hard strum does not
+    /// decide it. Nil without hops, as are the figures below.
+    var averagePeakDBFS: Float? {
+        hops.isEmpty ? nil : hops.reduce(0) { $0 + $1.peakDBFS } / Float(hops.count)
+    }
+
+    /// Average peak minus the power-mean RMS: both cover the same full hops.
+    var crestDB: Float? { averagePeakDBFS.map { $0 - levelDBFS } }
+
+    var octaveAveragePeakDBFS: [Float]? {
+        octaveFigures { hop, i in hop.octavePeakDBFS[i] }
+    }
+
+    var octaveCrestDB: [Float]? {
+        guard let peaks = octaveAveragePeakDBFS,
+              let meanSquares = octaveFigures({ hop, i in hop.octaveMeanSquare[i] }) else { return nil }
+        return zip(peaks, meanSquares).map { $0 - max(10 * log10($1), LogHop.floorDB) }
+    }
+
+    /// The per-octave mean of `value` over the hops.
+    private func octaveFigures(_ value: (LogHop, Int) -> Float) -> [Float]? {
+        let count = OctaveBands.centerFrequencies.count
+        guard !hops.isEmpty, hops.allSatisfy({ $0.octavePeakDBFS.count == count && $0.octaveMeanSquare.count == count })
+        else { return nil }
+        return (0..<count).map { i in hops.reduce(0) { $0 + value($1, i) } / Float(hops.count) }
+    }
 }
 
 enum NoiseResult: Equatable {
@@ -74,10 +108,10 @@ final class BandLog {
     }
 
     /// The newest `limit` hops at or above `threshold`, optionally only those
-    /// logged at or after sequence `since`.
-    func window(threshold: Float, limit: Int, since: Int = 0) -> ActiveWindow {
+    /// logged at or after sequence `since` and ending at or before frame `upTo`.
+    func window(threshold: Float, limit: Int, since: Int = 0, upTo: Int = .max) -> ActiveWindow {
         var picked: [LogHop] = []
-        for hop in hops.reversed() {
+        for hop in hops.reversed() where hop.endFrame <= upTo {
             if hop.sequence < since { break }
             if hop.rmsDBFS >= threshold {
                 picked.append(hop)
@@ -124,14 +158,44 @@ final class BandLog {
                             levelDBFS: level > 0 ? 10 * log10(level / n) : -.infinity)
     }
 
+    /// KTD2: five FFTs at 50% overlap, ending at the hop's end frame, cover
+    /// the whole hop.
+    static let fftsPerHop = 5
+
+    /// One read of the ring covers the FFTs, the hop's peak and RMS, and the
+    /// octave filters with their priming.
     private func append(ring: HistoryRing, endFrame: Int) {
-        let interleaved = ring.read(from: endFrame - SpectrumAnalyzer.fftSize, count: SpectrumAnalyzer.fftSize)
-        let (power, binHz) = fftPowerSpectrum(interleaved: interleaved, fftSize: SpectrumAnalyzer.fftSize)
+        let fftSize = SpectrumAnalyzer.fftSize
+        let filterFrames = Self.hopFrames + OctaveFilters.primingFrames
+        let span = max(filterFrames, fftSize + (Self.fftsPerHop - 1) * fftSize / 2)
+        let samples = ring.read(from: endFrame - span, count: span)
+        let channels = HistoryRing.channels
+
+        var bands = [Float](repeating: 0, count: ThirdOctaveBands.centerFrequencies.count)
+        var display = [Float](repeating: 0, count: SpectrumAnalyzer.displayPointCount)
+        for k in 0..<Self.fftsPerHop {
+            let start = span - fftSize - k * fftSize / 2
+            let (power, binHz) = fftPowerSpectrum(interleaved: Array(samples[(start * channels)..<((start + fftSize) * channels)]),
+                                                  fftSize: fftSize)
+            vDSP.add(bands, ThirdOctaveBands.aggregate(power: power, binHz: binHz), result: &bands)
+            vDSP.add(display, SpectrumAnalyzer.mapToDisplayPoints(magnitudes: power, binHz: binHz), result: &display)
+        }
+        let scale = 1 / Float(Self.fftsPerHop)
+
+        let hopSamples = Array(samples.suffix(Self.hopFrames * channels))
+        let peak = hopSamples.reduce(0) { max($0, abs(Int($1))) }
+        let mono = (span - filterFrames..<span).map {
+            (Double(samples[$0 * channels]) + Double(samples[$0 * channels + 1])) / 2 / 32768
+        }
+        let octaves = OctaveFilters.measure(mono, priming: OctaveFilters.primingFrames)
         hops.append(LogHop(sequence: nextSequence,
                            endFrame: endFrame,
-                           rmsDBFS: Payload.rmsDBFS(interleaved: interleaved),
-                           bands: ThirdOctaveBands.aggregate(power: power, binHz: binHz),
-                           display: SpectrumAnalyzer.mapToDisplayPoints(magnitudes: power, binHz: binHz)))
+                           rmsDBFS: Payload.rmsDBFS(interleaved: hopSamples),
+                           bands: vDSP.multiply(scale, bands),
+                           display: vDSP.multiply(scale, display),
+                           peakDBFS: peak > 0 ? 20 * log10(Float(peak) / 32768) : -.infinity,
+                           octavePeakDBFS: octaves.peaks.map { max(20 * log10(Float($0)), LogHop.floorDB) },
+                           octaveMeanSquare: octaves.meanSquares.map { Float($0) }))
         nextSequence += 1
         contiguousHops += 1
         if hops.count > Self.capacity { hops.removeFirst(hops.count - Self.capacity) }
